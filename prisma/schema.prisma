@@ -1,0 +1,1593 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  PLATFORM_ADMIN
+  HR_MANAGER
+  HR_SUPERVISOR
+  HR_USER
+  BRANCH_MANAGER
+  EMPLOYEE
+  DEVICE_MANAGER
+}
+
+enum HiringAppointmentStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+enum PayrollState {
+  draft
+  calculated
+  confirmed
+}
+
+enum DeductionState {
+  draft
+  linked
+  cancelled
+}
+
+enum AdvanceState {
+  pending
+  applied
+  draft
+  running
+  done
+  cancelled
+  /// HR stopped further payroll deductions; paid instalments stay.
+  stopped
+  confirmed
+  paid
+}
+
+enum ShiftGridState {
+  setup
+  grid
+  confirmed
+}
+
+enum SyncJobStatus {
+  pending
+  running
+  done
+  failed
+  cancelled
+}
+
+enum RequestState {
+  draft
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+/// Two-step approval for employee-submitted advances. Separate from `RequestState`
+/// because that enum is shared by six unrelated request models.
+enum AdvanceRequestState {
+  pending_branch
+  pending_hr
+  approved
+  rejected
+  cancelled
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  /// Login identifier employees type on the sign-in screen (case-insensitive unique).
+  code      String   @unique
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users                      User[]
+  userFeatureGrants          UserFeatureGrant[]
+  auditLogs                  AuditLog[]
+  dashboardNotificationReads DashboardNotificationRead[]
+  apiTokens                  ApiToken[]
+  employees                  EmployeeProfile[]
+  custodyTypes               CustodyType[]
+  employeeCustodies          EmployeeCustody[]
+  locations                  Location[]
+  insuranceCompanies         InsuranceCompany[]
+  jobTitles                  JobTitle[]
+  jobLevels                  JobLevel[]
+  archiveReasons             ArchiveReason[]
+  biotimeConfigs             BioTimeConfig[]
+  departments                Department[]
+  departmentMappings         DepartmentMapping[]
+  employeeMappings           EmployeeMapping[]
+  devices                    Device[]
+  transactions               Transaction[]
+  attendances                Attendance[]
+  shifts                     Shift[]
+  shiftAssignments           ShiftAssignment[]
+  shiftGrids                 ShiftGrid[]
+  shiftGridLines             ShiftGridLine[]
+  shiftGridManualOtLines     ShiftGridManualOtLine[]
+  odooConfigs                OdooConfig[]
+  odooSyncMaps               OdooSyncMap[]
+  syncJobs                   SyncJob[]
+  payrolls                   Payroll[]
+  payrollLines               PayrollLine[]
+  deductions                 Deduction[]
+  systemCounters             SystemCounter[]
+  punchReportImports         PunchReportImport[]
+  advanceLoanImports         AdvanceLoanImport[]
+  advanceLoanImportLines     AdvanceLoanImportLine[]
+  advancesShort              AdvanceShort[]
+  advancesLong               AdvanceLong[]
+  advanceLongPayments        AdvanceLongPayment[]
+  leaveRequests              LeaveRequest[]
+  loanRequests               LoanRequest[]
+  advanceRequests            AdvanceRequest[]
+  shiftChangeRequests        ShiftChangeRequest[]
+  salaryRequests             SalaryRequest[]
+  certificateRequests        CertificateRequest[]
+  attendanceEditRequests     AttendanceEditRequest[]
+  overtimeAnalyses           OvertimeAnalysis[]
+  hiringAppointments         HiringAppointment[]
+
+  @@map("companies")
+}
+
+model User {
+  companyId            String?   @map("company_id")
+  id                   String    @id @default(cuid())
+  login                String
+  email                String?
+  name                 String
+  passwordHash         String    @map("password_hash")
+  initialPassword      String?   @map("initial_password")
+  /// SHA-256 hex of one-time reset token (raw token only in email link).
+  passwordResetToken   String?   @map("password_reset_token")
+  passwordResetExpires DateTime? @map("password_reset_expires")
+  role                 UserRole  @default(EMPLOYEE)
+  locationId           String?   @map("location_id")
+  active               Boolean   @default(true)
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  location                  Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  employeeProfile           EmployeeProfile?
+  apiTokens                 ApiToken[]
+  hiringAppointmentsCreated HiringAppointment[] @relation("HiringAppointmentCreator")
+  featureGrants             UserFeatureGrant[]  @relation("FeatureGrantUser")
+  featureGrantsGiven        UserFeatureGrant[]  @relation("FeatureGrantBy")
+  company                   Company?            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, login])
+  @@index([locationId])
+  @@index([companyId])
+  @@map("users")
+}
+
+model UserFeatureGrant {
+  companyId   String?  @map("company_id")
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  feature     String
+  enabled     Boolean  @default(true)
+  grantedById String?  @map("granted_by_id")
+  grantedAt   DateTime @default(now()) @map("granted_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user      User     @relation("FeatureGrantUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User?    @relation("FeatureGrantBy", fields: [grantedById], references: [id], onDelete: SetNull)
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, feature])
+  @@index([feature, enabled])
+  @@index([companyId])
+  @@map("user_feature_grants")
+}
+
+model AuditLog {
+  companyId   String?   @map("company_id")
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now()) @map("created_at")
+  actorId     String?   @map("actor_id")
+  actorLogin  String    @map("actor_login")
+  actorName   String?   @map("actor_name")
+  actorRole   UserRole? @map("actor_role")
+  module      String
+  action      String
+  entityType  String?   @map("entity_type")
+  entityId    String?   @map("entity_id")
+  summary     String
+  counts      Json?
+  diffPreview Json?     @map("diff_preview")
+  payload     Json?
+  route       String?
+  ip          String?
+  requestId   String?   @map("request_id")
+  company     Company?  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+  @@index([module, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@index([companyId])
+  @@index([companyId, createdAt])
+  @@map("audit_logs")
+}
+
+model DashboardNotificationRead {
+  companyId      String?  @map("company_id")
+  id             String   @id @default(cuid())
+  readerKey      String   @map("reader_key")
+  notificationId String   @map("notification_id")
+  readAt         DateTime @default(now()) @map("read_at")
+  company        Company? @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([readerKey, notificationId])
+  @@index([readerKey])
+  @@index([companyId])
+  @@map("dashboard_notification_reads")
+}
+
+model ApiToken {
+  companyId  String?  @map("company_id")
+  id         String   @id @default(cuid())
+  token      String   @unique
+  userId     String   @map("user_id")
+  deviceInfo String?  @map("device_info")
+  expiryDate DateTime @map("expiry_date")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([companyId])
+  @@map("api_tokens")
+}
+
+model EmployeeProfile {
+  companyId                   String    @map("company_id")
+  id                          String    @id @default(cuid())
+  userId                      String?   @unique @map("user_id")
+  name                        String
+  displayName                 String?   @map("display_name")
+  code                        String?
+  identificationId            String?   @map("identification_id")
+  barcode                     String?
+  departmentId                String?   @map("department_id")
+  jobTitle                    String?   @map("job_title")
+  workPhone                   String?   @map("work_phone")
+  mobilePhone                 String?   @map("mobile_phone")
+  workEmail                   String?   @map("work_email")
+  /// Plaintext HR-visible password paired with workEmail (copy/export). Not a login hash.
+  workEmailPassword           String?   @map("work_email_password")
+  gender                      String?
+  location                    String?
+  address                     String?
+  locationId                  String?   @map("location_id")
+  /// Direct manager in the org chart (self-relation).
+  managerId                   String?   @map("manager_id")
+  basicSalary                 Float     @default(0) @map("basic_salary")
+  hiringDate                  DateTime? @map("hiring_date")
+  departureDate               DateTime? @map("departure_date")
+  nationalIdConfirm           String?   @map("national_id_confirm")
+  /// Non-Egyptian employee: national ID is optional / not Egyptian-format validated.
+  isForeigner                 Boolean   @default(false) @map("is_foreigner")
+  birthday                    DateTime? @map("birthday")
+  // Documents
+  qualificationOriginal       Boolean   @default(false) @map("qualification_original")
+  qualificationDocStatus      String    @default("none") @map("qualification_doc_status")
+  criminalRecord              Boolean   @default(false) @map("criminal_record")
+  birthCertificateOriginal    Boolean   @default(false) @map("birth_certificate_original")
+  birthCertificateDocStatus   String    @default("none") @map("birth_certificate_doc_status")
+  workStub                    Boolean   @default(false) @map("work_stub")
+  militaryServiceDoc          Boolean   @default(false) @map("military_service_doc")
+  militaryDocStatus           String    @default("none") @map("military_doc_status")
+  idCardPhoto                 Boolean   @default(false) @map("id_card_photo")
+  idCardPhotoUrl              String?   @map("id_card_photo_url")
+  personalPhoto               Boolean   @default(false) @map("personal_photo")
+  personalPhotoCount          Int       @default(0) @map("personal_photo_count")
+  personalPhotoDocUrl         String?   @map("personal_photo_doc_url")
+  insurancePrint              Boolean   @default(false) @map("insurance_print")
+  insurancePrintUrl           String?   @map("insurance_print_url")
+  qualificationDocUrl         String?   @map("qualification_doc_url")
+  militaryDocUrl              String?   @map("military_doc_url")
+  birthCertificateDocUrl      String?   @map("birth_certificate_doc_url")
+  criminalRecordDocUrl        String?   @map("criminal_record_doc_url")
+  // Skills & health
+  skillLevel                  String?   @map("skill_level")
+  hasSkillLevel               Boolean   @default(false) @map("has_skill_level")
+  healthCertificate           Boolean   @default(false) @map("health_certificate")
+  healthCertificateIssueDate  DateTime? @map("health_certificate_issue_date")
+  healthCertificateExpiryDate DateTime? @map("health_certificate_expiry_date")
+  // Insurance
+  insuranceNumber             String?   @map("insurance_number")
+  insuranceStatus             String?   @map("insurance_status")
+  insuranceCompanyId          String?   @map("insurance_company_id")
+  insuranceSalary             Float     @default(0) @map("insurance_salary")
+  medicalInsuranceStatus      String?   @map("medical_insurance_status")
+  medicalInsuranceCompanyId   String?   @map("medical_insurance_company_id")
+  medicalInsuranceSalary      Float     @default(0) @map("medical_insurance_salary")
+  // Accounts & leave
+  mobileLine                  Boolean   @default(false) @map("mobile_line")
+  hasFawryAccount             Boolean   @default(false) @map("has_fawry_account")
+  fawryAccount                String?   @map("fawry_account")
+  misrAccount                 Boolean   @default(false) @map("misr_account")
+  bankIban                    String?   @map("bank_iban")
+  mobileLinePhone             String?   @map("mobile_line_phone")
+  laptopProvided              Boolean   @default(false) @map("laptop_provided")
+  mobileProvided              Boolean   @default(false) @map("mobile_provided")
+  leaveStartingBalance        Float     @default(0) @map("leave_starting_balance")
+  usedLeaveDays               Float     @default(0) @map("used_leave_days")
+  remainingLeaveBalance       Float     @default(0) @map("remaining_leave_balance")
+  active                      Boolean   @default(true)
+  archivedAt                  DateTime? @map("archived_at")
+  archiveReason               String?   @map("archive_reason")
+  biotimeSynced               Boolean   @default(false) @map("biotime_synced")
+  biotimeDeviceId             String?   @map("biotime_device_id")
+  createdAt                   DateTime  @default(now()) @map("created_at")
+  updatedAt                   DateTime  @updatedAt @map("updated_at")
+
+  user                    User?                   @relation(fields: [userId], references: [id])
+  department              Department?             @relation(fields: [departmentId], references: [id])
+  workLocation            Location?               @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  manager                 EmployeeProfile?        @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
+  directReports           EmployeeProfile[]       @relation("EmployeeManager")
+  insuranceCompany        InsuranceCompany?       @relation("EmployeeInsuranceCompany", fields: [insuranceCompanyId], references: [id], onDelete: SetNull)
+  medicalInsuranceCompany InsuranceCompany?       @relation("EmployeeMedicalInsuranceCompany", fields: [medicalInsuranceCompanyId], references: [id], onDelete: SetNull)
+  mapping                 EmployeeMapping?
+  attendances             Attendance[]
+  shiftAssignments        ShiftAssignment[]
+  shiftGridLines          ShiftGridLine[]
+  payrollLines            PayrollLine[]
+  deductions              Deduction[]
+  advancesShort           AdvanceShort[]
+  advancesLong            AdvanceLong[]
+  advanceLoanImportLines  AdvanceLoanImportLine[]
+  transactions            Transaction[]
+  leaveRequests           LeaveRequest[]
+  loanRequests            LoanRequest[]
+  advanceRequests         AdvanceRequest[]
+  managedLocations        Location[]              @relation("LocationManager")
+  shiftChangeRequests     ShiftChangeRequest[]
+  salaryRequests          SalaryRequest[]
+  certificateRequests     CertificateRequest[]
+  attendanceEditRequests  AttendanceEditRequest[]
+  overtimeAnalyses        OvertimeAnalysis[]
+  hiringAppointment       HiringAppointment?
+  custodies               EmployeeCustody[]
+  shiftGridManualOtLines  ShiftGridManualOtLine[]
+  company                 Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@index([companyId, code])
+  @@index([companyId, active, locationId])
+  @@index([code])
+  @@index([active, locationId])
+  @@index([archivedAt])
+  @@index([managerId])
+  @@map("employee_profiles")
+}
+
+model CustodyType {
+  companyId String   @map("company_id")
+  id        String   @id @default(cuid())
+  name      String
+  code      String?
+  active    Boolean  @default(true)
+  sequence  Int      @default(10)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  assignments EmployeeCustody[]
+  company     Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@map("custody_types")
+}
+
+model EmployeeCustody {
+  companyId     String   @map("company_id")
+  id            String   @id @default(cuid())
+  employeeId    String   @map("employee_id")
+  custodyTypeId String   @map("custody_type_id")
+  provided      Boolean  @default(false)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  employee    EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  custodyType CustodyType     @relation(fields: [custodyTypeId], references: [id], onDelete: Cascade)
+  company     Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([employeeId, custodyTypeId])
+  @@index([custodyTypeId])
+  @@index([companyId])
+  @@map("employee_custodies")
+}
+
+model Location {
+  companyId              String   @map("company_id")
+  id                     String   @id @default(cuid())
+  name                   String
+  code                   String?
+  active                 Boolean  @default(true)
+  sequence               Int      @default(10)
+  actualName             String?  @map("actual_name")
+  loanNotificationEmails String[] @default([]) @map("loan_notification_emails")
+  /// Who signs off advance requests for this branch. Null falls back to the most
+  /// senior person the org chart derives for the site.
+  managerEmployeeId      String?  @map("manager_employee_id")
+  /// When true, employees at this branch can punch via mobile GPS (same transactions table).
+  locationPunchEnabled   Boolean  @default(false) @map("location_punch_enabled")
+  latitude               Float?
+  longitude              Float?
+  geofenceRadiusMeters   Int      @default(200) @map("geofence_radius_meters")
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  manager            EmployeeProfile?    @relation("LocationManager", fields: [managerEmployeeId], references: [id], onDelete: SetNull)
+  employees          EmployeeProfile[]
+  shiftGrids         ShiftGrid[]
+  users              User[]
+  devices            Device[]
+  hiringAppointments HiringAppointment[]
+  advanceRequests    AdvanceRequest[]
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, code])
+  @@index([managerEmployeeId])
+  @@index([companyId])
+  @@map("locations")
+}
+
+model InsuranceCompany {
+  companyId String   @map("company_id")
+  id        String   @id @default(cuid())
+  name      String
+  code      String?
+  active    Boolean  @default(true)
+  sequence  Int      @default(10)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  employees        EmployeeProfile[] @relation("EmployeeInsuranceCompany")
+  medicalEmployees EmployeeProfile[] @relation("EmployeeMedicalInsuranceCompany")
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@map("insurance_companies")
+}
+
+model JobTitle {
+  companyId String   @map("company_id")
+  id        String   @id @default(cuid())
+  name      String
+  code      String?
+  active    Boolean  @default(true)
+  sequence  Int      @default(10)
+  /// Seniority tier this title sits in. Null = fall back to the built-in heuristic.
+  levelId   String?  @map("level_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  level   JobLevel? @relation(fields: [levelId], references: [id], onDelete: SetNull)
+  company Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, name])
+  @@unique([companyId, code])
+  @@index([levelId])
+  @@index([companyId])
+  @@map("job_titles")
+}
+
+/// Configurable seniority tiers for the org chart («تدرج الوظائف»).
+/// `rank` orders the ladder — 1 is the most senior. Several titles share a tier.
+model JobLevel {
+  companyId String   @map("company_id")
+  id        String   @id @default(cuid())
+  name      String
+  nameEn    String?  @map("name_en")
+  code      String?
+  rank      Int
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  titles  JobTitle[]
+  company Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, name])
+  @@unique([companyId, rank])
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@map("job_levels")
+}
+
+/// Selectable reasons when archiving an employee (إنهاء / استقالة / …).
+model ArchiveReason {
+  companyId String   @map("company_id")
+  id        String   @id @default(cuid())
+  name      String
+  active    Boolean  @default(true)
+  sequence  Int      @default(10)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@map("archive_reasons")
+}
+
+model BioTimeConfig {
+  companyId                    String    @map("company_id")
+  id                           String    @id @default(cuid())
+  serverIp                     String    @default("") @map("server_ip")
+  serverPort                   Int       @default(8090) @map("server_port")
+  useHttps                     Boolean   @default(false) @map("use_https")
+  username                     String    @default("")
+  password                     String    @default("")
+  authType                     String    @default("jwt") @map("auth_type")
+  authToken                    String?   @map("auth_token")
+  tokenExpiry                  DateTime? @map("token_expiry")
+  isConnected                  Boolean   @default(false) @map("is_connected")
+  timezone                     String    @default("Africa/Cairo")
+  scheduledAutoSyncEnabled     Boolean   @default(true) @map("scheduled_auto_sync_enabled")
+  autoSyncEmployees            Boolean   @default(true) @map("auto_sync_employees")
+  autoSyncDepartments          Boolean   @default(true) @map("auto_sync_departments")
+  autoSyncTransactions         Boolean   @default(true) @map("auto_sync_transactions")
+  autoPushToBiotime            Boolean   @default(false) @map("auto_push_to_biotime")
+  autoPushDeletes              Boolean   @default(false) @map("auto_push_deletes")
+  defaultBiotimeAreaId         Int?      @map("default_biotime_area_id")
+  employeeSyncIntervalHours    Int       @default(12) @map("employee_sync_interval_hours")
+  transactionSyncIntervalMins  Int       @default(15) @map("transaction_sync_interval_mins")
+  duplicateGraceMinutes        Int       @default(1) @map("duplicate_grace_minutes")
+  duplicatePolicy              String    @default("mark") @map("duplicate_policy")
+  lastEmployeeSync             DateTime? @map("last_employee_sync")
+  lastDepartmentSync           DateTime? @map("last_department_sync")
+  lastTransactionSync          DateTime? @map("last_transaction_sync")
+  companyLogoPath              String?   @map("company_logo_path")
+  advanceDefaultPercent        Float     @default(25) @map("advance_default_percent")
+  advanceMinimumWorkingDays    Float     @default(15) @map("advance_minimum_working_days")
+  advanceEnforceLimit          Boolean   @default(true) @map("advance_enforce_limit")
+  advanceEligibilitySource     String    @default("punch_report") @map("advance_eligibility_source")
+  // Late deduction ladder: up to grace = free, then quarter day, then half day, above = full day.
+  lateGraceMinutes             Int       @default(20) @map("late_grace_minutes")
+  lateQuarterDayMaxMinutes     Int       @default(30) @map("late_quarter_day_max_minutes")
+  lateHalfDayMaxMinutes        Int       @default(60) @map("late_half_day_max_minutes")
+  // Late days excused per period before the ladder applies. 0 disables the allowance.
+  lateForgivenDaysCount        Int       @default(2) @map("late_forgiven_days_count")
+  // Which late days the allowance consumes: "oldest" by date, or "largest" by minutes.
+  lateForgivenDaysSelection    String    @default("oldest") @map("late_forgiven_days_selection")
+  // Whose grace wins when a shift sets its own: "longest", "policy" or "shift".
+  lateGracePrecedence          String    @default("longest") @map("late_grace_precedence")
+  // Cap on bus-delay permissions reported per period; the cap is skipped when disabled.
+  latePermissionCap            Int       @default(2) @map("late_permission_cap")
+  latePermissionCapEnabled     Boolean   @default(true) @map("late_permission_cap_enabled")
+  // Day of month the payroll period starts on, used to propose merge ranges.
+  payrollMonthStartDay         Int       @default(26) @map("payroll_month_start_day")
+  /// When true, payable base days use payrollFixedMonthDays (e.g. 30) instead of calendar length.
+  payrollFixedMonthDaysEnabled Boolean   @default(false) @map("payroll_fixed_month_days_enabled")
+  /// Payable month length when fixed mode is on (typically 30).
+  payrollFixedMonthDays        Int       @default(30) @map("payroll_fixed_month_days")
+  /// First N unpaid absences in a period do not count toward «غياب بدون إذن» penalty.
+  absentForgivenDaysCount      Int       @default(4) @map("absent_forgiven_days_count")
+  /// Job title ids allowed on tips import templates.
+  tipJobTitleIds               String[]  @default([]) @map("tip_job_title_ids")
+  // Weekday the weekly schedule starts on, 0 = Sunday through 6 = Saturday.
+  gridWeekStartDay             Int       @default(0) @map("grid_week_start_day")
+  // Who an employee may see on the schedule: none, department, branch or all.
+  employeeTeamScheduleScope    String    @default("department") @map("employee_team_schedule_scope")
+  // What of a colleague's day is revealed. Absence reasons are off by default.
+  employeeTeamShowShiftTimes   Boolean   @default(true) @map("employee_team_show_shift_times")
+  employeeTeamShowOffDays      Boolean   @default(true) @map("employee_team_show_off_days")
+  employeeTeamShowLeave        Boolean   @default(false) @map("employee_team_show_leave")
+  employeeTeamShowSickLeave    Boolean   @default(false) @map("employee_team_show_sick_leave")
+  // Hours after overnight end still on that shift; each shift can override lateCheckoutThreshold.
+  defaultLateCheckoutHours     Float     @default(4) @map("default_late_checkout_hours")
+  // Hours before next shift start counted as early check-in (caps overnight leave window).
+  defaultEarlyCheckinHours     Float     @default(2) @map("default_early_checkin_hours")
+  createdAt                    DateTime  @default(now()) @map("created_at")
+  updatedAt                    DateTime  @updatedAt @map("updated_at")
+  company                      Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId])
+  @@index([companyId])
+  @@map("biotime_config")
+}
+
+model Department {
+  companyId       String   @map("company_id")
+  id              String   @id @default(cuid())
+  name            String
+  nameEn          String?  @map("name_en")
+  code            String?
+  sequence        Int      @default(10)
+  biotimeDeptId   Int?     @map("biotime_dept_id")
+  biotimeDeptCode String?  @map("biotime_dept_code")
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  employees EmployeeProfile[]
+  mapping   DepartmentMapping?
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@map("departments")
+}
+
+model DepartmentMapping {
+  companyId       String  @map("company_id")
+  id              String  @id @default(cuid())
+  biotimeDeptId   Int     @map("biotime_dept_id")
+  biotimeDeptCode String? @map("biotime_dept_code")
+  biotimeDeptName String? @map("biotime_dept_name")
+  departmentId    String  @unique @map("department_id")
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@map("department_mappings")
+}
+
+model EmployeeMapping {
+  companyId           String    @map("company_id")
+  id                  String    @id @default(cuid())
+  biotimeEmpId        Int?      @map("biotime_emp_id")
+  biotimeEmpCode      String?   @map("biotime_emp_code")
+  employeeId          String    @unique @map("employee_id")
+  firstName           String?   @map("first_name")
+  lastName            String?   @map("last_name")
+  cardNo              String?   @map("card_no")
+  mobile              String?
+  email               String?
+  hireDate            DateTime? @map("hire_date")
+  gender              String?
+  biotimeDepartmentId Int?      @map("biotime_department_id")
+  biotimePositionId   Int?      @map("biotime_position_id")
+  lastSync            DateTime? @map("last_sync")
+  pushContentHash     String?   @map("push_content_hash")
+
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([biotimeEmpCode])
+  @@index([companyId])
+  @@map("employee_mappings")
+}
+
+model Device {
+  companyId    String   @map("company_id")
+  id           String   @id @default(cuid())
+  biotimeId    Int?     @map("biotime_id")
+  name         String
+  alias        String?
+  serialNumber String?  @map("serial_number")
+  ipAddress    String?  @map("ip_address")
+  locationId   String?  @map("location_id")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  location           Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  shiftGrids         ShiftGrid[]
+  deductions         Deduction[]
+  advanceLoanImports AdvanceLoanImport[]
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, biotimeId])
+  @@index([locationId])
+  @@index([companyId])
+  @@map("devices")
+}
+
+model Transaction {
+  companyId            String   @map("company_id")
+  id                   String   @id @default(cuid())
+  biotimeTransactionId Int?     @map("biotime_transaction_id")
+  employeeId           String?  @map("employee_id")
+  empCode              String?  @map("emp_code")
+  punchTime            DateTime @map("punch_time")
+  punchState           String?  @map("punch_state")
+  terminalSn           String?  @map("terminal_sn")
+  terminalAlias        String?  @map("terminal_alias")
+  /// biotime | mobile_geo — same table; distinguishes device sync vs mobile GPS punch.
+  punchSource          String?  @map("punch_source")
+  latitude             Float?
+  longitude            Float?
+  isDuplicate          Boolean  @default(false) @map("is_duplicate")
+  duplicateOfId        String?  @map("duplicate_of_id")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  employee    EmployeeProfile? @relation(fields: [employeeId], references: [id])
+  duplicateOf Transaction?     @relation("TransactionDuplicates", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates  Transaction[]    @relation("TransactionDuplicates")
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, biotimeTransactionId])
+  @@index([empCode, punchTime])
+  @@index([employeeId, punchTime])
+  @@index([isDuplicate])
+  @@index([companyId])
+  @@index([companyId, empCode, punchTime])
+  @@index([companyId, employeeId, punchTime])
+  @@index([companyId, punchSource])
+  @@map("transactions")
+}
+
+model Attendance {
+  companyId         String    @map("company_id")
+  id                String    @id @default(cuid())
+  employeeId        String    @map("employee_id")
+  date              DateTime  @db.Date
+  shiftId           String?   @map("shift_id")
+  expectedCheckIn   String?   @map("expected_check_in")
+  expectedCheckOut  String?   @map("expected_check_out")
+  firstCheckIn      DateTime? @map("first_check_in")
+  lastCheckOut      DateTime? @map("last_check_out")
+  workedHours       Float     @default(0) @map("worked_hours")
+  netWorkedHours    Float     @default(0) @map("net_worked_hours")
+  lateMinutes       Int       @default(0) @map("late_minutes")
+  earlyLeaveMinutes Int       @default(0) @map("early_leave_minutes")
+  overtimeHours     Float     @default(0) @map("overtime_hours")
+  status            String    @default("present")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift    Shift?          @relation(fields: [shiftId], references: [id])
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([employeeId, date])
+  @@index([companyId])
+  @@index([companyId, employeeId, date])
+  @@map("attendances")
+}
+
+model Shift {
+  companyId             String   @map("company_id")
+  id                    String   @id @default(cuid())
+  name                  String
+  code                  String?
+  startTime             String   @map("start_time")
+  endTime               String   @map("end_time")
+  isOvernight           Boolean  @default(false) @map("is_overnight")
+  workDateReference     String   @default("start") @map("work_date_reference")
+  earlyCheckinThreshold Float    @default(2) @map("early_checkin_threshold")
+  lateCheckoutThreshold Float    @default(4) @map("late_checkout_threshold")
+  restDays              String?  @map("rest_days")
+  gracePeriodIn         Int      @default(20) @map("grace_period_in")
+  gracePeriodOut        Int      @default(15) @map("grace_period_out")
+  breakDuration         Float    @default(0) @map("break_duration")
+  sequence              Int      @default(10)
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  assignments          ShiftAssignment[]    @relation("AssignmentDefaultShift")
+  saturdayAssignments  ShiftAssignment[]    @relation("SaturdayShift")
+  sundayAssignments    ShiftAssignment[]    @relation("SundayShift")
+  mondayAssignments    ShiftAssignment[]    @relation("MondayShift")
+  tuesdayAssignments   ShiftAssignment[]    @relation("TuesdayShift")
+  wednesdayAssignments ShiftAssignment[]    @relation("WednesdayShift")
+  thursdayAssignments  ShiftAssignment[]    @relation("ThursdayShift")
+  fridayAssignments    ShiftAssignment[]    @relation("FridayShift")
+  gridLines            ShiftGridLine[]
+  attendances          Attendance[]
+  shiftChangesFrom     ShiftChangeRequest[] @relation("ShiftChangeCurrent")
+  shiftChangesTo       ShiftChangeRequest[] @relation("ShiftChangeNew")
+  company              Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@map("shifts")
+}
+
+model ShiftAssignment {
+  companyId        String    @map("company_id")
+  id               String    @id @default(cuid())
+  employeeId       String    @map("employee_id")
+  shiftId          String?   @map("shift_id")
+  dateFrom         DateTime  @map("date_from") @db.Date
+  dateTo           DateTime? @map("date_to") @db.Date
+  weekDays         String?   @map("week_days")
+  assignmentType   String    @default("permanent") @map("assignment_type")
+  notes            String?
+  saturdayShiftId  String?   @map("saturday_shift_id")
+  sundayShiftId    String?   @map("sunday_shift_id")
+  mondayShiftId    String?   @map("monday_shift_id")
+  tuesdayShiftId   String?   @map("tuesday_shift_id")
+  wednesdayShiftId String?   @map("wednesday_shift_id")
+  thursdayShiftId  String?   @map("thursday_shift_id")
+  fridayShiftId    String?   @map("friday_shift_id")
+  saturdayIsOff    Boolean   @default(false) @map("saturday_is_off")
+  sundayIsOff      Boolean   @default(false) @map("sunday_is_off")
+  mondayIsOff      Boolean   @default(false) @map("monday_is_off")
+  tuesdayIsOff     Boolean   @default(false) @map("tuesday_is_off")
+  wednesdayIsOff   Boolean   @default(false) @map("wednesday_is_off")
+  thursdayIsOff    Boolean   @default(false) @map("thursday_is_off")
+  fridayIsOff      Boolean   @default(true) @map("friday_is_off")
+  active           Boolean   @default(true)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  employee       EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift          Shift?          @relation("AssignmentDefaultShift", fields: [shiftId], references: [id])
+  saturdayShift  Shift?          @relation("SaturdayShift", fields: [saturdayShiftId], references: [id])
+  sundayShift    Shift?          @relation("SundayShift", fields: [sundayShiftId], references: [id])
+  mondayShift    Shift?          @relation("MondayShift", fields: [mondayShiftId], references: [id])
+  tuesdayShift   Shift?          @relation("TuesdayShift", fields: [tuesdayShiftId], references: [id])
+  wednesdayShift Shift?          @relation("WednesdayShift", fields: [wednesdayShiftId], references: [id])
+  thursdayShift  Shift?          @relation("ThursdayShift", fields: [thursdayShiftId], references: [id])
+  fridayShift    Shift?          @relation("FridayShift", fields: [fridayShiftId], references: [id])
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@map("shift_assignments")
+}
+
+model ShiftGrid {
+  companyId         String         @map("company_id")
+  id                String         @id @default(cuid())
+  name              String
+  dateFrom          DateTime       @map("date_from") @db.Date
+  dateTo            DateTime       @map("date_to") @db.Date
+  state             ShiftGridState @default(setup)
+  selectionMethod   String         @default("manual") @map("selection_method")
+  conflictAction    String         @default("replace") @map("conflict_action")
+  employeeIds       String[]       @default([]) @map("employee_ids")
+  departmentIds     String[]       @default([]) @map("department_ids")
+  deviceId          String?        @map("device_id")
+  gridLocation      String?        @map("grid_location")
+  locationId        String?        @map("location_id")
+  /// Source grids when this one was produced by a merge; empty otherwise.
+  mergedFromGridIds String[]       @default([]) @map("merged_from_grid_ids")
+  mergedAt          DateTime?      @map("merged_at")
+  /// Weekly grid already folded into a monthly merge; null = still available.
+  mergedIntoGridId  String?        @map("merged_into_grid_id")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  device             Device?                 @relation(fields: [deviceId], references: [id])
+  location           Location?               @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  /// Monthly grid this week was added into (if any).
+  mergedInto         ShiftGrid?              @relation("ShiftGridMergedInto", fields: [mergedIntoGridId], references: [id], onDelete: SetNull)
+  mergedSourceGrids  ShiftGrid[]             @relation("ShiftGridMergedInto")
+  lines              ShiftGridLine[]
+  payrolls           Payroll[]
+  syncJobs           SyncJob[]
+  advancesShort      AdvanceShort[]
+  advanceLoanImports AdvanceLoanImport[]
+  punchReportImports PunchReportImport[]
+  manualOtLines      ShiftGridManualOtLine[]
+  company            Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([mergedIntoGridId])
+  @@index([companyId])
+  @@map("shift_grids")
+}
+
+model ShiftGridLine {
+  companyId       String   @map("company_id")
+  id              String   @id @default(cuid())
+  gridId          String   @map("grid_id")
+  employeeId      String   @map("employee_id")
+  date            DateTime @db.Date
+  shiftId         String?  @map("shift_id")
+  isOff           Boolean  @default(false) @map("is_off")
+  isSick          Boolean  @default(false) @map("is_sick")
+  isAnnualLeave   Boolean  @default(false) @map("is_annual_leave")
+  isExcluded      Boolean  @default(false) @map("is_excluded")
+  isBusDelay      Boolean  @default(false) @map("is_bus_delay")
+  isPresent       Boolean  @default(false) @map("is_present")
+  isFinished      Boolean  @default(false) @map("is_finished")
+  isResignation   Boolean  @default(false) @map("is_resignation")
+  isWorkAbsence   Boolean  @default(false) @map("is_work_absence")
+  isWorkInjury    Boolean  @default(false) @map("is_work_injury")
+  isMarriageLeave Boolean  @default(false) @map("is_marriage_leave")
+
+  grid     ShiftGrid       @relation(fields: [gridId], references: [id], onDelete: Cascade)
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift    Shift?          @relation(fields: [shiftId], references: [id])
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([gridId, employeeId, date])
+  @@index([companyId])
+  @@index([companyId, gridId, employeeId, date])
+  @@map("shift_grid_lines")
+}
+
+/// Manual overtime eligibility: only these employee+day pairs earn OT on
+/// punch-report export for this grid — formula (net − shift) / 9 days.
+model ShiftGridManualOtLine {
+  companyId  String   @map("company_id")
+  id         String   @id @default(cuid())
+  gridId     String   @map("grid_id")
+  employeeId String   @map("employee_id")
+  date       DateTime @db.Date
+  note       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  grid     ShiftGrid       @relation(fields: [gridId], references: [id], onDelete: Cascade)
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([gridId, employeeId, date])
+  @@index([gridId])
+  @@index([companyId])
+  @@map("shift_grid_manual_ot_lines")
+}
+
+model OdooConfig {
+  companyId                String    @map("company_id")
+  id                       String    @id @default(cuid())
+  baseUrl                  String    @default("") @map("base_url")
+  database                 String    @default("") @map("database")
+  login                    String    @default("")
+  password                 String    @default("")
+  authToken                String?   @map("auth_token")
+  tokenExpiry              DateTime? @map("token_expiry")
+  isConnected              Boolean   @default(false) @map("is_connected")
+  /// Master switch for the Odoo Integration settings card and send buttons.
+  integrationEnabled       Boolean   @default(false) @map("integration_enabled")
+  /// Odoo account.journal id used when creating biotime.deduction.loan.accounts.send.
+  journalOdooId            Int?      @map("journal_odoo_id")
+  cashDebitAccountOdooId   Int?      @map("cash_debit_account_odoo_id")
+  cashCreditAccountOdooId  Int?      @map("cash_credit_account_odoo_id")
+  fawryDebitAccountOdooId  Int?      @map("fawry_debit_account_odoo_id")
+  fawryCreditAccountOdooId Int?      @map("fawry_credit_account_odoo_id")
+  lastPushAt               DateTime? @map("last_push_at")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+  company                  Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId])
+  @@index([companyId])
+  @@map("odoo_config")
+}
+
+model OdooSyncMap {
+  companyId   String   @map("company_id")
+  id          String   @id @default(cuid())
+  entityType  String   @map("entity_type")
+  localId     String   @map("local_id")
+  odooId      String   @map("odoo_id")
+  syncedAt    DateTime @default(now()) @map("synced_at")
+  contentHash String?  @map("content_hash")
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, entityType, localId])
+  @@index([entityType, odooId])
+  @@index([companyId])
+  @@map("odoo_sync_maps")
+}
+
+model SyncJob {
+  companyId  String        @map("company_id")
+  id         String        @id @default(cuid())
+  gridId     String?       @map("grid_id")
+  jobType    String        @map("job_type")
+  status     SyncJobStatus @default(pending)
+  progress   Int           @default(0)
+  message    String?
+  startedAt  DateTime?     @map("started_at")
+  finishedAt DateTime?     @map("finished_at")
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  grid    ShiftGrid? @relation(fields: [gridId], references: [id])
+  company Company    @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@map("sync_jobs")
+}
+
+model Payroll {
+  companyId                String       @map("company_id")
+  id                       String       @id @default(cuid())
+  name                     String?
+  dateFrom                 DateTime     @map("date_from") @db.Date
+  dateTo                   DateTime     @map("date_to") @db.Date
+  state                    PayrollState @default(draft)
+  shiftGridId              String?      @map("shift_grid_id")
+  deviceId                 String?      @map("device_id")
+  totalGross               Float        @default(0) @map("total_gross")
+  totalNet                 Float        @default(0) @map("total_net")
+  totalDeductions          Float        @default(0) @map("total_deductions")
+  journalEntryId           String?      @map("journal_entry_id")
+  odooMoveId               Int?         @map("odoo_move_id")
+  odooMoveName             String?      @map("odoo_move_name")
+  odooPayrollJournalId     Int?         @map("odoo_payroll_journal_id")
+  odooSentAt               DateTime?    @map("odoo_sent_at")
+  /// Employee IDs removed from this payroll (Excel/UI). Calculate must not re-add them from punch.
+  excludedEmployeeIds      String[]     @default([]) @map("excluded_employee_ids")
+  /// Set on successful payroll Excel import. While set, «حساب» only links advances/deductions (no punch rebuild). Cleared by punch-report reimport.
+  excelImportedAt          DateTime?    @map("excel_imported_at")
+  showEditComparison       Boolean      @default(false) @map("show_edit_comparison")
+  editImportMessage        String?      @map("edit_import_message")
+  comparisonTotalNetBefore Float        @default(0) @map("comparison_total_net_before")
+  comparisonTotalNetAfter  Float        @default(0) @map("comparison_total_net_after")
+  createdAt                DateTime     @default(now()) @map("created_at")
+  updatedAt                DateTime     @updatedAt @map("updated_at")
+
+  shiftGrid           ShiftGrid?           @relation(fields: [shiftGridId], references: [id])
+  lines               PayrollLine[]
+  deductions          Deduction[]
+  advancesShort       AdvanceShort[]
+  advanceLongPayments AdvanceLongPayment[]
+  punchReportImports  PunchReportImport[]
+  company             Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@map("payrolls")
+}
+
+model PayrollLine {
+  companyId                   String   @map("company_id")
+  id                          String   @id @default(cuid())
+  payrollId                   String   @map("payroll_id")
+  employeeId                  String   @map("employee_id")
+  sequence                    Int      @default(0)
+  employeeCode                String?  @map("employee_code")
+  basicSalary                 Float    @default(0) @map("basic_salary")
+  workingDays                 Float    @default(0) @map("working_days")
+  actualWorkingDays           Float    @default(0) @map("actual_working_days")
+  workDaysSalary              Float    @default(0) @map("work_days_salary")
+  grossSalary                 Float    @default(0) @map("gross_salary")
+  totalEarnings               Float    @default(0) @map("total_earnings")
+  overtimeHours               Float    @default(0) @map("overtime_hours")
+  overtimeAmount              Float    @default(0) @map("overtime_amount")
+  totalDeductions             Float    @default(0) @map("total_deductions")
+  netSalary                   Float    @default(0) @map("net_salary")
+  absentDays                  Float    @default(0) @map("absent_days")
+  absentCount                 Float    @default(0) @map("absent_count")
+  sickDayCount                Float    @default(0) @map("sick_day_count")
+  leaveAbsenceDeductionValue  Float    @default(0) @map("leave_absence_deduction_value")
+  editSnapshotSet             Boolean  @default(false) @map("edit_snapshot_set")
+  editNetBefore               Float    @default(0) @map("edit_net_before")
+  editManualDedBefore         Float    @default(0) @map("edit_manual_ded_before")
+  lateDeductibleDays          Float    @default(0) @map("late_deductible_days")
+  earnedLeave                 Float    @default(0) @map("earned_leave")
+  permissionCount             Int      @default(0) @map("permission_count")
+  lateDeduction               Float    @default(0) @map("late_deduction")
+  earlyDeduction              Float    @default(0) @map("early_deduction")
+  absentDeduction             Float    @default(0) @map("absent_deduction")
+  sickDeduction               Float    @default(0) @map("sick_deduction")
+  manualDebit                 Float    @default(0) @map("manual_debit")
+  penaltyDeductionValue       Float    @default(0) @map("penalty_deduction_value")
+  adminDeduction              Float    @default(0) @map("admin_deduction")
+  fines                       Float    @default(0)
+  deductionChecks             Float    @default(0) @map("deduction_checks")
+  groupedChecks               Float    @default(0) @map("grouped_checks")
+  healthCertificatesDeduction Float    @default(0) @map("health_certificates_deduction")
+  fractionDeduction           Float    @default(0) @map("fraction_deduction")
+  documentsDeduction          Float    @default(0) @map("documents_deduction")
+  socialInsurance             Float    @default(0) @map("social_insurance")
+  medicalInsurance            Float    @default(0) @map("medical_insurance")
+  advanceShortTotal           Float    @default(0) @map("advance_short_total")
+  advanceLongTotal            Float    @default(0) @map("advance_long_total")
+  previousSettlements         Float    @default(0) @map("previous_settlements")
+  previousInsurance           Float    @default(0) @map("previous_insurance")
+  punchDeductionCheckin       Float    @default(0) @map("punch_deduction_checkin")
+  punchDeductionCheckout      Float    @default(0) @map("punch_deduction_checkout")
+  lateCheckoutDeduction       Float    @default(0) @map("late_checkout_deduction")
+  singlePunchCount            Float    @default(0) @map("single_punch_count")
+  lateDeductibleMinutes       Float    @default(0) @map("late_deductible_minutes")
+  earlyLeaveMinutes           Float    @default(0) @map("early_leave_minutes")
+  offDayCount                 Float    @default(0) @map("off_day_count")
+  daysCount                   Int      @default(0) @map("days_count")
+  totalNetHours               Float    @default(0) @map("total_net_hours")
+  departmentName              String?  @map("department_name")
+  positionName                String?  @map("position_name")
+  employeeLocation            String?  @map("employee_location")
+  notes                       String?
+  /// Odoo is_manual — line added via payroll Excel import (not from punch report).
+  isManual                    Boolean  @default(false) @map("is_manual")
+  /// Frozen at confirm / Odoo send: «فوري» | «كاش». When set, Cash/Fawry exports ignore later archive/flag changes.
+  paymentMethod               String?  @map("payment_method")
+  /// Frozen resigned/archived (yellow) state at confirm / Odoo send. When set, exports ignore later archive changes.
+  resignedFrozen              Boolean? @map("resigned_frozen")
+
+  payroll               Payroll              @relation(fields: [payrollId], references: [id], onDelete: Cascade)
+  employee              EmployeeProfile      @relation(fields: [employeeId], references: [id])
+  advancesShortReserved AdvanceShort[]
+  advanceLongPayments   AdvanceLongPayment[]
+  deductions            Deduction[]
+  company               Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([payrollId, employeeId])
+  @@index([companyId])
+  @@index([companyId, payrollId])
+  @@map("payroll_lines")
+}
+
+model Deduction {
+  companyId     String         @map("company_id")
+  id            String         @id @default(cuid())
+  reference     String?
+  employeeId    String         @map("employee_id")
+  payrollId     String?        @map("payroll_id")
+  payrollLineId String?        @map("payroll_line_id")
+  deviceId      String?        @map("device_id")
+  type          String
+  amount        Float
+  appliedAmount Float          @default(0) @map("applied_amount")
+  state         DeductionState @default(draft)
+  date          DateTime       @default(now()) @db.Date
+  notes         String?
+  createdAt     DateTime       @default(now()) @map("created_at")
+
+  employee    EmployeeProfile @relation(fields: [employeeId], references: [id])
+  payroll     Payroll?        @relation(fields: [payrollId], references: [id])
+  payrollLine PayrollLine?    @relation(fields: [payrollLineId], references: [id], onDelete: SetNull)
+  device      Device?         @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  company     Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, date, state])
+  @@index([payrollId, type])
+  @@index([companyId])
+  @@map("deductions")
+}
+
+model SystemCounter {
+  companyId String @map("company_id")
+  id        String
+  value     Int    @default(0)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@id([companyId, id])
+  @@index([companyId])
+  @@map("system_counters")
+}
+
+enum AdvanceLoanImportState {
+  draft
+  locked
+}
+
+enum PunchReportImportState {
+  ready
+  applied
+}
+
+model PunchReportImport {
+  companyId        String                 @map("company_id")
+  id               String                 @id @default(cuid())
+  shiftGridId      String                 @map("shift_grid_id")
+  dateFrom         DateTime               @map("date_from") @db.Date
+  dateTo           DateTime               @map("date_to") @db.Date
+  sourceFilename   String?                @map("source_filename")
+  sourceFileBase64 String?                @map("source_file_base64") @db.Text
+  exportWizardId   String?                @map("export_wizard_id")
+  state            PunchReportImportState @default(ready)
+  employeeCount    Int                    @default(0) @map("employee_count")
+  /// Map of employee_code → attendance summary (day fractions / counts).
+  summariesJson    Json                   @map("summaries_json")
+  payrollId        String?                @map("payroll_id")
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+
+  shiftGrid ShiftGrid @relation(fields: [shiftGridId], references: [id], onDelete: Cascade)
+  payroll   Payroll?  @relation(fields: [payrollId], references: [id], onDelete: SetNull)
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([shiftGridId, createdAt])
+  @@index([companyId])
+  @@map("punch_report_imports")
+}
+
+model AdvanceLoanImport {
+  companyId                   String                 @map("company_id")
+  id                          String                 @id @default(cuid())
+  reference                   String
+  deviceId                    String?                @map("device_id")
+  sourceGridId                String?                @map("source_grid_id")
+  date                        DateTime               @db.Date
+  state                       AdvanceLoanImportState @default(draft)
+  defaultRepaymentMonths      Int                    @default(12) @map("default_repayment_months")
+  defaultReason               String?                @map("default_reason")
+  /// Odoo biotime.deduction.loan.accounts.send id after send-to-accounts.
+  odooAccountsSendId          Int?                   @map("odoo_accounts_send_id")
+  /// Odoo account.move id created from the accounts-send record.
+  odooMoveId                  Int?                   @map("odoo_move_id")
+  odooSendRef                 String?                @map("odoo_send_ref")
+  notificationEmailsSentAt    DateTime?              @map("notification_emails_sent_at")
+  notificationEmailError      String?                @map("notification_email_error")
+  notificationEmailRecipients String[]               @default([]) @map("notification_email_recipients")
+  kind                        String                 @default("loan")
+  /// Frozen Cash/Fawry totals after approve/send — not recalculated from live employee Fawry flags.
+  cashAmount                  Float?                 @map("cash_amount")
+  fawryAmount                 Float?                 @map("fawry_amount")
+  totalAmount                 Float?                 @map("total_amount")
+  createdAt                   DateTime               @default(now()) @map("created_at")
+
+  device     Device?                 @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  sourceGrid ShiftGrid?              @relation(fields: [sourceGridId], references: [id], onDelete: SetNull)
+  lines      AdvanceLoanImportLine[]
+  company    Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@map("advance_loan_imports")
+}
+
+model AdvanceLoanImportLine {
+  companyId             String  @map("company_id")
+  id                    String  @id @default(cuid())
+  importId              String  @map("import_id")
+  employeeId            String? @map("employee_id")
+  employeeCode          String? @map("employee_code")
+  employeeName          String? @map("employee_name")
+  requestedAmount       Float   @default(0) @map("requested_amount")
+  eligibleAmount        Float   @default(0) @map("eligible_amount")
+  systemEligibleAmount  Float?  @map("system_eligible_amount")
+  eligibilityOverridden Boolean @default(false) @map("eligibility_overridden")
+  approvedAmount        Float   @default(0) @map("approved_amount")
+  actualWorkingDays     Float?  @map("actual_working_days")
+  compareStatus         String  @default("ready") @map("compare_status")
+  toApprove             Boolean @default(true) @map("to_approve")
+  rowReason             String? @map("row_reason")
+  repaymentMonths       Int?    @map("repayment_months")
+  shortAdvanceId        String? @map("short_advance_id")
+  note                  String?
+  /// Payment channel at import/approve time — frozen so later Fawry toggles do not rewrite sent sheets.
+  isFawry               Boolean @default(false) @map("is_fawry")
+  ineligibilityReason   String? @map("ineligibility_reason")
+
+  import   AdvanceLoanImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  employee EmployeeProfile?  @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  company  Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([importId])
+  @@index([companyId])
+  @@map("advance_loan_import_lines")
+}
+
+model AdvanceShort {
+  companyId                   String       @map("company_id")
+  id                          String       @id @default(cuid())
+  employeeId                  String       @map("employee_id")
+  sourceGridId                String?      @map("source_grid_id")
+  payrollId                   String?      @map("payroll_id")
+  payrollLineId               String?      @map("payroll_line_id")
+  amount                      Float
+  state                       AdvanceState @default(pending)
+  isDeducted                  Boolean      @default(false) @map("is_deducted")
+  date                        DateTime     @default(now()) @db.Date
+  deductionStartDate          DateTime     @default(now()) @map("deduction_start_date") @db.Date
+  notes                       String?
+  eligibilityPercent          Float?       @map("eligibility_percent")
+  maxEligibleAtCreation       Float?       @map("max_eligible_at_creation")
+  actualWorkingDaysAtCreation Float?       @map("actual_working_days_at_creation")
+  limitOverride               Boolean      @default(false) @map("limit_override")
+  overrideReason              String?      @map("override_reason")
+  createdAt                   DateTime     @default(now()) @map("created_at")
+
+  employee    EmployeeProfile @relation(fields: [employeeId], references: [id])
+  sourceGrid  ShiftGrid?      @relation(fields: [sourceGridId], references: [id], onDelete: SetNull)
+  payroll     Payroll?        @relation(fields: [payrollId], references: [id], onDelete: SetNull)
+  payrollLine PayrollLine?    @relation(fields: [payrollLineId], references: [id], onDelete: SetNull)
+  company     Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@map("advances_short")
+}
+
+model AdvanceLong {
+  companyId                   String       @map("company_id")
+  id                          String       @id @default(cuid())
+  employeeId                  String       @map("employee_id")
+  totalAmount                 Float        @map("total_amount")
+  installmentAmount           Float        @map("installment_amount")
+  installments                Int          @default(1)
+  state                       AdvanceState @default(draft)
+  date                        DateTime     @default(now()) @db.Date
+  startDate                   DateTime?    @map("start_date") @db.Date
+  nextDeductionDate           DateTime?    @map("next_deduction_date") @db.Date
+  notes                       String?
+  eligibilityPercent          Float?       @map("eligibility_percent")
+  maxEligibleAtCreation       Float?       @map("max_eligible_at_creation")
+  actualWorkingDaysAtCreation Float?       @map("actual_working_days_at_creation")
+  limitOverride               Boolean      @default(false) @map("limit_override")
+  overrideReason              String?      @map("override_reason")
+  isAccountingLocked          Boolean      @default(false) @map("is_accounting_locked")
+  remainingJournalMoveId      String?      @map("remaining_journal_move_id")
+  odooAdvanceLongId           Int?         @map("odoo_advance_long_id")
+  odooAccountsSendId          Int?         @map("odoo_accounts_send_id")
+  odooMoveId                  Int?         @map("odoo_move_id")
+  odooMoveName                String?      @map("odoo_move_name")
+  odooSentAt                  DateTime?    @map("odoo_sent_at")
+  odooSyncError               String?      @map("odoo_sync_error")
+  createdAt                   DateTime     @default(now()) @map("created_at")
+
+  employee EmployeeProfile      @relation(fields: [employeeId], references: [id])
+  payments AdvanceLongPayment[]
+  company  Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([odooAdvanceLongId])
+  @@index([companyId])
+  @@map("advances_long")
+}
+
+model AdvanceLongPayment {
+  companyId     String       @map("company_id")
+  id            String       @id @default(cuid())
+  advanceId     String       @map("advance_id")
+  amount        Float
+  state         AdvanceState @default(applied)
+  payrollId     String?      @map("payroll_id")
+  payrollLineId String?      @map("payroll_line_id")
+  paymentDate   DateTime     @default(now()) @map("payment_date") @db.Date
+
+  advance     AdvanceLong  @relation(fields: [advanceId], references: [id], onDelete: Cascade)
+  payroll     Payroll?     @relation(fields: [payrollId], references: [id], onDelete: SetNull)
+  payrollLine PayrollLine? @relation(fields: [payrollLineId], references: [id], onDelete: SetNull)
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@map("advance_long_payments")
+}
+
+model LeaveRequest {
+  companyId       String       @map("company_id")
+  id              String       @id @default(cuid())
+  employeeId      String       @map("employee_id")
+  leaveType       String       @map("leave_type")
+  dateFrom        DateTime     @map("date_from") @db.Date
+  dateTo          DateTime     @map("date_to") @db.Date
+  reason          String
+  state           RequestState @default(pending)
+  approvedById    String?      @map("approved_by_id")
+  rejectionReason String?      @map("rejection_reason")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, state])
+  @@index([companyId])
+  @@map("leave_requests")
+}
+
+model LoanRequest {
+  companyId       String       @map("company_id")
+  id              String       @id @default(cuid())
+  employeeId      String       @map("employee_id")
+  amount          Float
+  repaymentMonths Int          @default(1) @map("repayment_months")
+  reason          String
+  state           RequestState @default(pending)
+  approvedById    String?      @map("approved_by_id")
+  rejectionReason String?      @map("rejection_reason")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, state])
+  @@index([companyId])
+  @@map("loan_requests")
+}
+
+/// An employee (or their branch manager) asking for a short advance.
+/// Approval by HR is what actually creates the `AdvanceShort` that payroll deducts;
+/// until then this row only reserves the amount against the employee's entitlement.
+model AdvanceRequest {
+  companyId     String              @map("company_id")
+  id            String              @id @default(cuid())
+  employeeId    String              @map("employee_id")
+  /// User who submitted — the employee themselves, or a manager acting for them.
+  requestedById String              @map("requested_by_id")
+  /// Frozen at submit so the branch queue stays stable if the employee moves site.
+  locationId    String?             @map("location_id")
+  amount        Float
+  reason        String
+  state         AdvanceRequestState @default(pending_branch)
+
+  /// Entitlement as it stood when the request was filed, for later review.
+  eligibilityPercent         Float? @map("eligibility_percent")
+  maxEligibleAtRequest       Float? @map("max_eligible_at_request")
+  availableAtRequest         Float? @map("available_at_request")
+  actualWorkingDaysAtRequest Float? @map("actual_working_days_at_request")
+
+  branchApprovedById String?   @map("branch_approved_by_id")
+  branchApprovedAt   DateTime? @map("branch_approved_at")
+  hrApprovedById     String?   @map("hr_approved_by_id")
+  hrApprovedAt       DateTime? @map("hr_approved_at")
+  rejectedById       String?   @map("rejected_by_id")
+  rejectionReason    String?   @map("rejection_reason")
+
+  /// HR may approve above the entitlement, but only with a written reason.
+  limitOverride  Boolean @default(false) @map("limit_override")
+  overrideReason String? @map("override_reason")
+
+  /// The advance created on approval. Null until HR approves.
+  advanceShortId String? @unique @map("advance_short_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  location Location?       @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, state])
+  @@index([state, locationId])
+  @@index([companyId])
+  @@map("advance_requests")
+}
+
+model ShiftChangeRequest {
+  companyId       String       @map("company_id")
+  id              String       @id @default(cuid())
+  employeeId      String       @map("employee_id")
+  currentShiftId  String?      @map("current_shift_id")
+  newShiftId      String       @map("new_shift_id")
+  dateFrom        DateTime     @map("date_from") @db.Date
+  dateTo          DateTime     @map("date_to") @db.Date
+  reason          String
+  state           RequestState @default(pending)
+  approvedById    String?      @map("approved_by_id")
+  rejectionReason String?      @map("rejection_reason")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  employee     EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  currentShift Shift?          @relation("ShiftChangeCurrent", fields: [currentShiftId], references: [id])
+  newShift     Shift           @relation("ShiftChangeNew", fields: [newShiftId], references: [id])
+  company      Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, state])
+  @@index([companyId])
+  @@map("shift_change_requests")
+}
+
+model SalaryRequest {
+  companyId       String       @map("company_id")
+  id              String       @id @default(cuid())
+  employeeId      String       @map("employee_id")
+  amount          Float
+  reason          String
+  state           RequestState @default(pending)
+  approvedById    String?      @map("approved_by_id")
+  rejectionReason String?      @map("rejection_reason")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, state])
+  @@index([companyId])
+  @@map("salary_requests")
+}
+
+model CertificateRequest {
+  companyId       String       @map("company_id")
+  id              String       @id @default(cuid())
+  employeeId      String       @map("employee_id")
+  certificateType String       @map("certificate_type")
+  reason          String
+  state           RequestState @default(pending)
+  approvedById    String?      @map("approved_by_id")
+  rejectionReason String?      @map("rejection_reason")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, state])
+  @@index([companyId])
+  @@map("certificate_requests")
+}
+
+model AttendanceEditRequest {
+  companyId         String       @map("company_id")
+  id                String       @id @default(cuid())
+  employeeId        String       @map("employee_id")
+  date              DateTime     @db.Date
+  requestedCheckIn  String?      @map("requested_check_in")
+  requestedCheckOut String?      @map("requested_check_out")
+  reason            String
+  state             RequestState @default(pending)
+  approvedById      String?      @map("approved_by_id")
+  rejectionReason   String?      @map("rejection_reason")
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt @map("updated_at")
+
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, state])
+  @@index([companyId])
+  @@map("attendance_edit_requests")
+}
+
+model OvertimeAnalysis {
+  companyId         String       @map("company_id")
+  id                String       @id @default(cuid())
+  employeeId        String       @map("employee_id")
+  date              DateTime     @db.Date
+  shiftId           String?      @map("shift_id")
+  expectedHours     Float        @default(0) @map("expected_hours")
+  actualHours       Float        @default(0) @map("actual_hours")
+  overtimeHours     Float        @default(0) @map("overtime_hours")
+  lateMinutes       Int          @default(0) @map("late_minutes")
+  earlyLeaveMinutes Int          @default(0) @map("early_leave_minutes")
+  attendanceStatus  String       @default("on_time") @map("attendance_status")
+  state             RequestState @default(pending)
+  approvedById      String?      @map("approved_by_id")
+  rejectionReason   String?      @map("rejection_reason")
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt @map("updated_at")
+
+  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([employeeId, date])
+  @@index([state])
+  @@index([companyId])
+  @@map("overtime_analyses")
+}
+
+model HiringAppointment {
+  companyId         String                  @map("company_id")
+  id                String                  @id @default(cuid())
+  appointmentDate   DateTime                @map("appointment_date") @db.Date
+  employeeName      String                  @map("employee_name")
+  mobilePhone       String                  @map("mobile_phone")
+  nationalId        String                  @map("national_id")
+  jobTitle          String                  @map("job_title")
+  locationId        String?                 @map("location_id")
+  fingerprintCode   String                  @map("fingerprint_code")
+  firstWorkingDay   DateTime                @map("first_working_day") @db.Date
+  status            HiringAppointmentStatus @default(pending)
+  statusNote        String?                 @map("status_note")
+  notes             String?
+  pdfPath           String?                 @map("pdf_path")
+  createdByUserId   String                  @map("created_by_user_id")
+  approvedAt        DateTime?               @map("approved_at")
+  approvedByName    String?                 @map("approved_by_name")
+  hrSeenAt          DateTime?               @map("hr_seen_at")
+  externalRef       String?                 @map("external_ref")
+  employeeProfileId String?                 @unique @map("employee_profile_id")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+
+  location        Location?        @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  createdBy       User             @relation("HiringAppointmentCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  employeeProfile EmployeeProfile? @relation(fields: [employeeProfileId], references: [id], onDelete: SetNull)
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([locationId, status])
+  @@index([createdByUserId])
+  @@index([status, hrSeenAt])
+  @@index([companyId])
+  @@map("hiring_appointments")
+}
+
+/// Public mobile app version catalog (used by external mobile clients).
+model MobileVersion {
+  id        Int      @id @default(autoincrement())
+  version   String
+  isPublish String   @default("false") @map("is_publish")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("mobile_versions")
+}

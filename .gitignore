@@ -1,0 +1,16 @@
+tmp_*.xlsx
+node_modules/
+dist/
+# Generated export artifacts (punch reports, sent-payroll snapshots)
+storage/
+# Local verification drops (payroll files pulled from Odoo)
+files_to_check/
+.env
+.env.*
+*.log
+coverage/
+tests/load/.fixture.json
+test-artifacts/
+# Local review working notes, never published
+.jez/
+.cursor/

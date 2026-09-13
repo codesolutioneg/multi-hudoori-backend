@@ -1,0 +1,38 @@
+name: Deploy backend (dev)
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: hudoori-backend-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to DEV server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            APP_DIR="/root/hodouri/bio_time_backend-dev"
+            cd "$APP_DIR"
+            git fetch origin
+            git checkout dev
+            if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git status --porcelain -u)" ]; then
+              git stash push -u -m "auto-deploy-dev $(date -u +%Y%m%dT%H%M%SZ)" || true
+            fi
+            git pull --ff-only origin dev
+            /root/hodouri/deploy/hudoori/build-backend.sh dev
+            pm2 startOrReload /root/hodouri/deploy/hudoori/pm2.ecosystem.config.cjs --only biotime-backend-dev
+            pm2 save
+            echo "Backend DEV deploy OK: $(git rev-parse --short HEAD)"
