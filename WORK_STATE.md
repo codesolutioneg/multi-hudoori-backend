@@ -25,3 +25,4 @@
 - **Auto**: تغطية REST المتبقية — e2e `restRoutesCoverage` (15): archive-reasons / custody / insurance / job-titles / departments / locations / shifts / assignments / devices / jobs / odoo status / absences / overtime / shift-change / تقارير. إصلاحات مصاحبة: `ensureDefaultCustodyTypes` و `getOdooConfig` بـ `companyId`. **MULTI**.
 - **Auto**: تشخيص فشل دخول `i@mandara.com` — الإيميل/الباسورد محفوظان لكن `userId` كان null (مزامنة login فشلت سابقاً بصمت). تمت مزامنة الحساب يدوياً؛ الدخول يعمل بـ `companyCode=mandara`. e2e `employeeWorkEmailLogin` (13) تغطي حالات WORK_STATE: provision / companyCode / menus / READ_ONLY / auto-mint / archive / collision / report. **MULTI**.
 - **Auto**: Initial commit + `origin` → `codesolutioneg/multi-hudoori-backend` (local `main`). Push blocked: token user has pull-only (403). **MULTI**.
+- **Auto**: Pushed `main` to `https://github.com/codesolutioneg/multi-hudoori-backend.git`. **MULTI**.
