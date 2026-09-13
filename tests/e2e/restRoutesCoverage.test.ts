@@ -441,4 +441,129 @@ describe('rest routes coverage (remaining)', () => {
       );
     });
   });
+
+  describe('WORK_STATE flow smoke (tenant-safe writes)', () => {
+    it('creates job level, shift grid, payroll, and hiring appointment', async () => {
+      const emp = await prismaBase.employeeProfile.create({
+        data: {
+          companyId,
+          name: 'Flow Emp',
+          code: 'FLOW1',
+          locationId,
+          basicSalary: 4000,
+        },
+      });
+
+      const level = expectOk(
+        await rpc(
+          '/api/biotime/job-levels/create',
+          { name: 'طاقم', code: 'staff' },
+          hr.token,
+        ),
+      );
+      const levels = (level.levels as Array<{ name: string }>) ?? [];
+      expect(levels.some((l) => l.name === 'طاقم')).toBe(true);
+
+      const grid = expectOk(
+        await rpc(
+          '/api/biotime/shift-grid/create',
+          {
+            name: 'Week A',
+            locationId,
+            dateFrom: '2026-09-01',
+            dateTo: '2026-09-07',
+            selectionMethod: 'location',
+            employeeIds: [emp.id],
+          },
+          hr.token,
+        ),
+      );
+      const gridId = (grid.grid as { id: string }).id;
+
+      const payroll = expectOk(
+        await rpc(
+          '/api/biotime/payroll/create',
+          {
+            name: 'Sep cycle',
+            dateFrom: '2026-08-26',
+            dateTo: '2026-09-25',
+            shiftGridId: gridId,
+          },
+          hr.token,
+        ),
+      );
+      expect((payroll.payroll as { id: string }).id).toBeTruthy();
+
+      const calc = expectOk(
+        await rpc(
+          '/api/biotime/payroll/calculate',
+          { id: (payroll.payroll as { id: string }).id },
+          hr.token,
+        ),
+      );
+      expect(calc.payroll || calc).toBeTruthy();
+
+      const hiring = expectOk(
+        await rpc(
+          '/api/biotime/hiring-appointments/create',
+          {
+            employeeName: 'New Hire',
+            fingerprintCode: 'NH100',
+            jobTitle: 'Waiter',
+            locationId,
+            mobilePhone: '01000000001',
+            appointmentDate: '2026-09-20',
+            firstWorkingDay: '2026-09-21',
+            skipNationalId: true,
+          },
+          hr.token,
+        ),
+      );
+      expect((hiring.appointment as { id?: string }).id).toBeTruthy();
+
+      // Short advance may be NOT_ELIGIBLE without punches — still must not 500.
+      const adv = await rpc(
+        '/api/biotime/advances/short/create',
+        { employeeId: emp.id, amount: 100, reason: 'test' },
+        hr.token,
+      );
+      expect(adv.status).toBe(200);
+      expect(adv.body.result?.error_code === 'SERVER_ERROR').toBe(false);
+    });
+
+    it('keeps companies isolated on shift-grid and payroll lists', async () => {
+      const other = await prismaBase.company.create({
+        data: { code: 'otherflow', name: 'Other Flow', active: true },
+      });
+      const otherLoc = await prismaBase.location.create({
+        data: { companyId: other.id, name: 'Other Loc', code: 'OL1' },
+      });
+      await prismaBase.shiftGrid.create({
+        data: {
+          companyId: other.id,
+          name: 'Secret Grid',
+          dateFrom: new Date('2026-09-01'),
+          dateTo: new Date('2026-09-07'),
+          locationId: otherLoc.id,
+          gridLocation: 'Other Loc',
+          selectionMethod: 'location',
+        },
+      });
+      await prismaBase.payroll.create({
+        data: {
+          companyId: other.id,
+          name: 'Secret Pay',
+          dateFrom: new Date('2026-08-26'),
+          dateTo: new Date('2026-09-25'),
+        },
+      });
+
+      const grids = expectOk(await rpc('/api/biotime/shift-grid/list', {}, hr.token));
+      const payrolls = expectOk(await rpc('/api/biotime/payroll/list', {}, hr.token));
+      const gridNames = ((grids.grids as Array<{ name?: string }>) ?? []).map((g) => g.name);
+      const payNames = ((payrolls.payrolls as Array<{ name?: string }>) ?? []).map((p) => p.name);
+      expect(gridNames).not.toContain('Secret Grid');
+      expect(payNames).not.toContain('Secret Pay');
+    });
+  });
 });

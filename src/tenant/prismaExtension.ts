@@ -10,6 +10,7 @@ type AnyArgs = {
   where?: Record<string, unknown>;
   data?: Record<string, unknown> | Record<string, unknown>[];
   create?: Record<string, unknown>;
+  update?: Record<string, unknown>;
 };
 
 function andWhere(where: Record<string, unknown> | undefined, companyId: string): Record<string, unknown> {
@@ -42,6 +43,19 @@ function sameCompany(row: unknown, companyId: string, requires: boolean): boolea
   // so platform rows are hidden and tenant rows must match.
   if (cid == null) return false;
   return cid === companyId;
+}
+
+function modelDelegate(
+  base: PrismaClient,
+  model: string,
+): { findUnique: (x: unknown) => Promise<unknown>; findFirst: (x: unknown) => Promise<unknown> } | null {
+  const modelKey = model.charAt(0).toLowerCase() + model.slice(1);
+  const delegate = (base as unknown as Record<string, unknown>)[modelKey];
+  if (!delegate || typeof delegate !== 'object') return null;
+  return delegate as {
+    findUnique: (x: unknown) => Promise<unknown>;
+    findFirst: (x: unknown) => Promise<unknown>;
+  };
 }
 
 /**
@@ -87,15 +101,11 @@ export function withTenantExtension(base: PrismaClient) {
               // `select` may omit companyId — peek via unscoped base before deciding.
               let cid = rowCompanyId(row);
               if (cid === undefined && a.where) {
-                const modelKey = model.charAt(0).toLowerCase() + model.slice(1);
-                const delegate = (base as unknown as Record<
-                  string,
-                  { findUnique: (x: unknown) => Promise<{ companyId?: string | null } | null> }
-                >)[modelKey];
-                const peek = await delegate?.findUnique?.({
+                const delegate = modelDelegate(base, model);
+                const peek = (await delegate?.findUnique?.({
                   where: a.where,
                   select: { companyId: true },
-                });
+                })) as { companyId?: string | null } | null;
                 cid = peek?.companyId;
               }
               const ok = requires ? cid === companyId : cid != null && cid === companyId;
@@ -119,12 +129,17 @@ export function withTenantExtension(base: PrismaClient) {
             case 'update':
             case 'delete': {
               // Peek first so we never mutate another company's row.
-              const modelKey = model.charAt(0).toLowerCase() + model.slice(1);
-              const delegate = (base as unknown as Record<string, { findUnique: (x: unknown) => Promise<unknown> }>)[
-                modelKey
-              ];
-              if (delegate?.findUnique && a.where) {
-                const existing = await delegate.findUnique({ where: a.where });
+              // Prefer findUnique; fall back to findFirst+companyId when where is not a unique key.
+              const delegate = modelDelegate(base, model);
+              if (delegate && a.where) {
+                let existing: unknown = null;
+                try {
+                  existing = await delegate.findUnique({ where: a.where });
+                } catch {
+                  existing = await delegate.findFirst({
+                    where: andWhere(a.where, companyId),
+                  });
+                }
                 if (!existing || !sameCompany(existing, companyId, requires)) {
                   throw new Error('RECORD_NOT_FOUND_IN_COMPANY');
                 }
@@ -137,10 +152,15 @@ export function withTenantExtension(base: PrismaClient) {
               a.where = andWhere(a.where, companyId);
               return query(a);
 
-            case 'upsert':
-              a.where = andWhere(a.where, companyId);
-              if (a.create) a.create = injectCreateData(a.create, companyId) as Record<string, unknown>;
+            case 'upsert': {
+              // Never wrap unique `where` in AND — Prisma rejects that for upsert.
+              // Inject companyId into create (and update when missing); callers must
+              // use compound unique keys that already include companyId when required.
+              if (a.create) {
+                a.create = injectCreateData(a.create, companyId) as Record<string, unknown>;
+              }
               return query(a);
+            }
 
             default:
               return query(args);

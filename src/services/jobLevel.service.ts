@@ -80,7 +80,7 @@ export async function createJobLevel(input: {
   const name = String(input.name ?? '').trim();
   if (!name) throw new ValidationError('اسم المستوى مطلوب');
 
-  const clash = await prisma.jobLevel.findUnique({ where: { name } });
+  const clash = await prisma.jobLevel.findFirst({ where: { name } });
   if (clash) throw new ValidationError('يوجد مستوى بنفس الاسم');
 
   const last = await prisma.jobLevel.findFirst({ orderBy: { rank: 'desc' } });

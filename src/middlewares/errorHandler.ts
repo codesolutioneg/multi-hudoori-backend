@@ -32,10 +32,24 @@ function fromHttpError(err: unknown): AppError | null {
   return new AppError(message, status, code);
 }
 
+function fromTenantError(err: unknown): AppError | null {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  if (msg === 'COMPANY_CONTEXT_REQUIRED' || msg.startsWith('COMPANY_CONTEXT_REQUIRED:')) {
+    return new AppError('Company context required', 403, 'COMPANY_CONTEXT_REQUIRED');
+  }
+  if (msg === 'RECORD_NOT_FOUND_IN_COMPANY') {
+    return new NotFoundError('Record not found', 'NOT_FOUND');
+  }
+  return null;
+}
+
 export function errorHandler(err: Error, req: Request, res: Response, _next: NextFunction): void {
   const id = req.rpcId;
 
-  const mapped = err instanceof AppError ? err : (fromPrisma(err) ?? fromHttpError(err));
+  const mapped =
+    err instanceof AppError
+      ? err
+      : (fromTenantError(err) ?? fromPrisma(err) ?? fromHttpError(err));
   if (mapped) {
     if (mapped.statusCode >= 500) {
       logger.error(

@@ -2,6 +2,7 @@ import type { Request } from 'express';
 import { Prisma, UserRole } from '@prisma/client';
 import ExcelJS from 'exceljs';
 import { prisma } from '../prisma/client';
+import { getCompanyId } from '../tenant/context';
 import { AppError, ForbiddenError } from '../utils/errors';
 import { exportFileResponse } from './payrollExport.service';
 
@@ -629,18 +630,35 @@ export async function listAuditLogs(params: {
   const search = params.search?.trim();
   if (search) {
     const like = `%${search.replace(/[%_]/g, '\\$&')}%`;
-    const payloadHits = await prisma.$queryRaw<{ id: string }[]>`
-      SELECT id FROM audit_logs
-      WHERE summary ILIKE ${like}
-         OR actor_login ILIKE ${like}
-         OR COALESCE(actor_name, '') ILIKE ${like}
-         OR COALESCE(entity_id, '') ILIKE ${like}
-         OR action ILIKE ${like}
-         OR COALESCE(payload::text, '') ILIKE ${like}
-         OR COALESCE(diff_preview::text, '') ILIKE ${like}
-      ORDER BY created_at DESC
-      LIMIT 800
-    `;
+    const companyId = getCompanyId();
+    const payloadHits = companyId
+      ? await prisma.$queryRaw<{ id: string }[]>`
+          SELECT id FROM audit_logs
+          WHERE company_id = ${companyId}
+            AND (
+              summary ILIKE ${like}
+              OR actor_login ILIKE ${like}
+              OR COALESCE(actor_name, '') ILIKE ${like}
+              OR COALESCE(entity_id, '') ILIKE ${like}
+              OR action ILIKE ${like}
+              OR COALESCE(payload::text, '') ILIKE ${like}
+              OR COALESCE(diff_preview::text, '') ILIKE ${like}
+            )
+          ORDER BY created_at DESC
+          LIMIT 800
+        `
+      : await prisma.$queryRaw<{ id: string }[]>`
+          SELECT id FROM audit_logs
+          WHERE summary ILIKE ${like}
+             OR actor_login ILIKE ${like}
+             OR COALESCE(actor_name, '') ILIKE ${like}
+             OR COALESCE(entity_id, '') ILIKE ${like}
+             OR action ILIKE ${like}
+             OR COALESCE(payload::text, '') ILIKE ${like}
+             OR COALESCE(diff_preview::text, '') ILIKE ${like}
+          ORDER BY created_at DESC
+          LIMIT 800
+        `;
     const ids = payloadHits.map((h) => h.id);
     if (!ids.length) {
       return { items: [], total: 0, limit, offset, hasMore: false };

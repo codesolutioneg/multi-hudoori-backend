@@ -9,6 +9,7 @@ import {
   ShiftGridState,
 } from '@prisma/client';
 import { prisma } from '../../prisma/client';
+import { requireCompanyId } from '../../tenant/context';
 import { logger } from '../../utils/logger';
 import { floatToTimeString, computeIsOvernight } from '../shiftCalculations.service';
 import * as odooClient from './odooClient.service';
@@ -85,9 +86,10 @@ function mapAdvanceLongState(state: string): AdvanceState {
 
 async function saveOdooMap(entityType: string, localId: string, odooId: string | number) {
   const id = String(odooId);
+  const companyId = requireCompanyId();
   await prisma.odooSyncMap.upsert({
-    where: { entityType_localId: { entityType, localId } },
-    create: { entityType, localId, odooId: id },
+    where: { companyId_entityType_localId: { companyId, entityType, localId } },
+    create: { companyId, entityType, localId, odooId: id },
     update: { odooId: id, syncedAt: new Date() },
   });
 }

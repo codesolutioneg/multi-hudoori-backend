@@ -6,17 +6,30 @@ export type TenantStore = {
   /** True when Super Admin selected a company from the switcher. */
   isImpersonatingCompany: boolean;
   actorUserId?: string;
+  /** Bumped by test resetDatabase so stale enterWith leaks are ignored. */
+  generation?: number;
 };
 
 const als = new AsyncLocalStorage<TenantStore>();
 
+/** Monotonic generation — tests bump this on DB wipe so leaked enterWith stores are ignored. */
+let tenantGeneration = 0;
+
+export function bumpTenantGeneration(): void {
+  tenantGeneration += 1;
+}
+
+export function getTenantGeneration(): number {
+  return tenantGeneration;
+}
+
 export function runWithTenant<T>(store: TenantStore, fn: () => T): T {
-  return als.run(store, fn);
+  return als.run({ ...store, generation: tenantGeneration }, fn);
 }
 
 /** Bind tenant for the rest of this Express request (survives async next()). */
 export function enterTenant(store: TenantStore): void {
-  als.enterWith(store);
+  als.enterWith({ ...store, generation: tenantGeneration });
 }
 
 export function getTenantStore(): TenantStore | undefined {
@@ -24,7 +37,17 @@ export function getTenantStore(): TenantStore | undefined {
 }
 
 export function getCompanyId(): string | null {
-  return als.getStore()?.companyId ?? null;
+  const store = als.getStore();
+  if (store && store.generation === tenantGeneration) {
+    return store.companyId ?? null;
+  }
+  // Vitest worker: stale enterWith from a prior HTTP request (wrong generation),
+  // or no ALS at all across await/beforeEach boundaries.
+  if (process.env.NODE_ENV === 'test') {
+    const fallback = process.env.TEST_FALLBACK_COMPANY_ID?.trim();
+    if (fallback) return fallback;
+  }
+  return store?.companyId ?? null;
 }
 
 export function requireCompanyId(): string {

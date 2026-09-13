@@ -9,6 +9,7 @@ import {
   createShift,
   createUser,
   ensureBioTimeConfig,
+  ensureDefaultCompany,
   resetDatabase,
   type SeededUser,
 } from '../helpers/db';
@@ -81,6 +82,7 @@ describe('full weekly payroll cycle (DEV, pull-only, never push)', () => {
 
   beforeEach(async () => {
     await resetDatabase();
+    await ensureDefaultCompany();
     vi.clearAllMocks();
 
     const cfg = await prisma.bioTimeConfig.findFirstOrThrow();

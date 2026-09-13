@@ -6,6 +6,7 @@ import {
   createLocation,
   createUser,
   ensureBioTimeConfig,
+  ensureDefaultCompany,
   resetDatabase,
   type SeededUser,
 } from '../helpers/db';
@@ -29,6 +30,7 @@ describe('advance requests', () => {
 
   beforeEach(async () => {
     await resetDatabase();
+    await ensureDefaultCompany();
     // Working-days gate off so specs exercise the request flow, not the punch
     // report; the amount limit itself stays enforced.
     await prisma.bioTimeConfig.updateMany({

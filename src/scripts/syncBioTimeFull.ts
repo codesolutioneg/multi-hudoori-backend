@@ -40,7 +40,7 @@ async function bootstrapLocationsFromEmployees(): Promise<{ created: number; lin
     let loc = await resolveLocationByName(name);
     if (!loc) {
       let code = slugCode(name);
-      const taken = await prisma.location.findUnique({ where: { code } });
+      const taken = await prisma.location.findFirst({ where: { code } });
       if (taken) code = `${code}_${created + 1}`;
       loc = await prisma.location.create({ data: { name, code } });
       created++;

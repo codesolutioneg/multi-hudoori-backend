@@ -1,5 +1,6 @@
 import { SyncJobStatus } from '@prisma/client';
 import { prisma } from '../../prisma/client';
+import { requireCompanyId } from '../../tenant/context';
 import {
   formatBioTimeDateTime,
   formatBioTimeRange,
@@ -124,8 +125,9 @@ async function syncSingleTransaction(
     terminalAlias: row.terminal_alias ?? null,
   };
 
+  const companyId = requireCompanyId();
   const existing = await prisma.transaction.findUnique({
-    where: { biotimeTransactionId: row.id },
+    where: { companyId_biotimeTransactionId: { companyId, biotimeTransactionId: row.id } },
   });
 
   let localId: string;
@@ -140,7 +142,7 @@ async function syncSingleTransaction(
   }
 
   const created = await prisma.transaction.create({
-    data: { biotimeTransactionId: row.id, ...payload },
+    data: { companyId, biotimeTransactionId: row.id, ...payload },
   });
   localId = created.id;
   await applyDuplicateMarking(localId, config);
@@ -432,7 +434,7 @@ export async function syncDevices(): Promise<number> {
     for (const row of rows) {
       const name = row.alias ?? row.sn ?? `Device ${row.id}`;
       await prisma.device.upsert({
-        where: { biotimeId: row.id },
+        where: { companyId_biotimeId: { companyId: requireCompanyId(), biotimeId: row.id } },
         create: {
           biotimeId: row.id,
           name,

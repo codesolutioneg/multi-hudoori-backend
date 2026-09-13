@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { AdvanceState, DeductionState, PayrollState } from '@prisma/client';
 import { prisma } from '../../prisma/client';
+import { requireCompanyId } from '../../tenant/context';
 import { logger } from '../../utils/logger';
 import * as odooClient from './odooClient.service';
 
@@ -37,8 +38,9 @@ function fmtDate(d: Date): string {
 }
 
 async function getMap(entityType: string, localId: string) {
+  const companyId = requireCompanyId();
   return prisma.odooSyncMap.findUnique({
-    where: { entityType_localId: { entityType, localId } },
+    where: { companyId_entityType_localId: { companyId, entityType, localId } },
   });
 }
 
@@ -48,9 +50,10 @@ async function saveMap(
   odooId: string,
   hash?: string,
 ): Promise<void> {
+  const companyId = requireCompanyId();
   await prisma.odooSyncMap.upsert({
-    where: { entityType_localId: { entityType, localId } },
-    create: { entityType, localId, odooId, contentHash: hash },
+    where: { companyId_entityType_localId: { companyId, entityType, localId } },
+    create: { companyId, entityType, localId, odooId, contentHash: hash },
     update: { odooId, contentHash: hash, syncedAt: new Date() },
   });
 }

@@ -51,7 +51,9 @@ async function main() {
     return;
   }
 
-  const admin = await prisma.user.findUnique({ where: { login: PLATFORM_ADMIN_LOGIN } });
+  const admin = await prisma.user.findFirst({
+    where: { login: PLATFORM_ADMIN_LOGIN, companyId: null },
+  });
   if (!admin) {
     throw new Error(`Platform admin not found: ${PLATFORM_ADMIN_LOGIN}. Run npm run prisma:seed first.`);
   }

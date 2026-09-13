@@ -1,4 +1,5 @@
 import { prisma } from '../prisma/client';
+import { getCompanyId } from '../tenant/context';
 import type { JobTitle } from '@prisma/client';
 
 export function jobTitleJson(row: JobTitle) {
@@ -13,12 +14,21 @@ export function jobTitleJson(row: JobTitle) {
 
 /** Upsert any job titles currently used on employees into the catalog. */
 export async function syncJobTitlesFromEmployees(): Promise<number> {
-  const rows = await prisma.$queryRaw<Array<{ name: string }>>`
-    SELECT MIN(TRIM(job_title)) AS name
-    FROM employee_profiles
-    WHERE job_title IS NOT NULL AND TRIM(job_title) <> ''
-    GROUP BY LOWER(TRIM(job_title))
-  `;
+  const companyId = getCompanyId();
+  const rows = companyId
+    ? await prisma.$queryRaw<Array<{ name: string }>>`
+        SELECT MIN(TRIM(job_title)) AS name
+        FROM employee_profiles
+        WHERE company_id = ${companyId}
+          AND job_title IS NOT NULL AND TRIM(job_title) <> ''
+        GROUP BY LOWER(TRIM(job_title))
+      `
+    : await prisma.$queryRaw<Array<{ name: string }>>`
+        SELECT MIN(TRIM(job_title)) AS name
+        FROM employee_profiles
+        WHERE job_title IS NOT NULL AND TRIM(job_title) <> ''
+        GROUP BY LOWER(TRIM(job_title))
+      `;
   let created = 0;
   for (const row of rows) {
     const name = String(row.name ?? '').trim();

@@ -1,5 +1,6 @@
 import { SyncJobStatus } from '@prisma/client';
 import { prisma } from '../prisma/client';
+import { getCompanyId, runWithTenant } from '../tenant/context';
 import { logger } from '../utils/logger';
 import * as attendanceService from './attendance.service';
 import * as overtimeService from './overtime.service';
@@ -11,25 +12,53 @@ async function finishJob(
   status: SyncJobStatus,
   message: string,
   progress = 100,
+  companyId?: string | null,
 ): Promise<void> {
-  await prisma.syncJob.update({
-    where: { id: jobId },
-    data: { status, message, progress, finishedAt: new Date() },
-  });
+  const run = async () => {
+    await prisma.syncJob.update({
+      where: { id: jobId },
+      data: { status, message, progress, finishedAt: new Date() },
+    });
+  };
+  if (companyId) {
+    await runWithTenant(
+      { companyId, isImpersonatingCompany: false, actorUserId: 'generate-job' },
+      run,
+    );
+  } else {
+    await run();
+  }
 }
 
 function runInBackground(jobId: string, jobType: string, work: () => Promise<string>): void {
+  const companyId = getCompanyId();
   setImmediate(async () => {
-    try {
-      const message = await work();
-      await finishJob(jobId, SyncJobStatus.done, message);
-    } catch (err) {
-      logger.error({ err, jobId, jobType }, 'Background generate job failed');
-      await finishJob(
-        jobId,
-        SyncJobStatus.failed,
-        err instanceof Error ? err.message : 'Generate failed',
+    const run = async () => {
+      try {
+        const message = await work();
+        await finishJob(jobId, SyncJobStatus.done, message, 100, companyId);
+      } catch (err) {
+        logger.error({ err, jobId, jobType, companyId }, 'Background generate job failed');
+        try {
+          await finishJob(
+            jobId,
+            SyncJobStatus.failed,
+            err instanceof Error ? err.message : 'Generate failed',
+            100,
+            companyId,
+          );
+        } catch (finishErr) {
+          logger.error({ finishErr, jobId }, 'Failed to mark generate job failed');
+        }
+      }
+    };
+    if (companyId) {
+      await runWithTenant(
+        { companyId, isImpersonatingCompany: false, actorUserId: 'generate-job' },
+        run,
       );
+    } else {
+      await run();
     }
   });
 }

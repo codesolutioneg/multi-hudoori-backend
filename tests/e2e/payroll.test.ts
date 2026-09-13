@@ -37,14 +37,15 @@ async function seedPunchedEmployee(opts: { code: string; name: string; basicSala
       employeeId: employee.id,
       empCode: opts.code,
       biotimeTransactionId: txId++,
-      punchTime: new Date(`2026-06-${day}T05:00:00.000Z`), // 08:00 Cairo
+      // Device wall-clock digits tagged UTC (not the Cairo→UTC instant).
+      punchTime: new Date(`2026-06-${day}T08:00:00.000Z`),
       punchState: '0',
     });
     rows.push({
       employeeId: employee.id,
       empCode: opts.code,
       biotimeTransactionId: txId++,
-      punchTime: new Date(`2026-06-${day}T14:00:00.000Z`), // 17:00 Cairo
+      punchTime: new Date(`2026-06-${day}T17:00:00.000Z`),
       punchState: '1',
     });
   }
@@ -281,7 +282,7 @@ describe('payroll lifecycle', () => {
       expect(data.count).toBe(0);
     });
 
-    it('exposes the payslip detail to the owning employee', async () => {
+    it('blocks employee role from payroll/my (attendance/schedule only)', async () => {
       const line = await prisma.payrollLine.findUniqueOrThrow({ where: { id: lineId } });
       const employeeUser = await createUser({ login: 'own@test.local', role: UserRole.EMPLOYEE });
       await prisma.employeeProfile.update({
@@ -290,9 +291,7 @@ describe('payroll lifecycle', () => {
       });
       await rpc('/api/biotime/payroll/confirm', { id: payrollId }, hr.token);
 
-      const data = expectOk(await rpc('/api/biotime/payroll/my', {}, employeeUser.token));
-      expect((data.records as unknown[]).length).toBeGreaterThan(0);
-      expect(data.count).toBeGreaterThan(0);
+      expectFail(await rpc('/api/biotime/payroll/my', {}, employeeUser.token), 'READ_ONLY');
     });
   });
 

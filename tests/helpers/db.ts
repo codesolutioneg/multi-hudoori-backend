@@ -1,7 +1,7 @@
 import bcrypt from 'bcrypt';
 import { UserRole } from '@prisma/client';
 import { prisma, prismaBase } from '../../src/prisma/client';
-import { enterTenant, runWithTenant } from '../../src/tenant/context';
+import { runWithTenant, bumpTenantGeneration } from '../../src/tenant/context';
 import { ensureBioTimeConfigFromEnv } from '../../src/bootstrap/biotimeConfig';
 import { ensureOdooConfigFromEnv } from '../../src/bootstrap/odooConfig';
 
@@ -74,6 +74,8 @@ async function resolveExistingTables(): Promise<string[]> {
 /** Wipe all business data including companies (multi-tenant test DB). */
 export async function resetDatabase(): Promise<void> {
   defaultCompanyId = null;
+  delete process.env.TEST_FALLBACK_COMPANY_ID;
+  bumpTenantGeneration();
   const tables = await resolveExistingTables();
   const list = tables.map((t) => `"public"."${t}"`).join(', ');
   await prismaBase.$executeRawUnsafe(`TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`);
@@ -81,7 +83,10 @@ export async function resetDatabase(): Promise<void> {
 
 /** Ensure a default company exists for legacy helpers / non-isolation specs. */
 export async function ensureDefaultCompany(): Promise<string> {
-  if (defaultCompanyId) return defaultCompanyId;
+  if (defaultCompanyId) {
+    process.env.TEST_FALLBACK_COMPANY_ID = defaultCompanyId;
+    return defaultCompanyId;
+  }
   let company = await prismaBase.company.findFirst({ where: { code: 'testco' } });
   if (!company) {
     company = await prismaBase.company.create({
@@ -91,7 +96,18 @@ export async function ensureDefaultCompany(): Promise<string> {
     await ensureOdooConfigFromEnv(company.id);
   }
   defaultCompanyId = company.id;
+  process.env.TEST_FALLBACK_COMPANY_ID = company.id;
   return company.id;
+}
+
+/**
+ * Run seed/assert callbacks with a real ALS `run()` scope.
+ * Do not use enterWith in tests — it does not survive Vitest/await boundaries and
+ * stale ids from Express auth middleware cause FK violations after resetDatabase.
+ */
+export async function withDefaultTenant<T>(fn: () => Promise<T>): Promise<T> {
+  const companyId = await ensureDefaultCompany();
+  return runWithTenant({ companyId, isImpersonatingCompany: false, actorUserId: 'test' }, fn);
 }
 
 export async function ensureBioTimeConfig(): Promise<void> {
@@ -194,9 +210,8 @@ export async function createUserPerRole(): Promise<Record<UserRole, SeededUser>>
 
 export async function createShift(overrides: Record<string, unknown> = {}) {
   const companyId = (overrides.companyId as string | undefined) ?? (await ensureDefaultCompany());
-  return runWithTenant({ companyId, isImpersonatingCompany: false, actorUserId: 'test' }, async () => {
-    enterTenant({ companyId, isImpersonatingCompany: false, actorUserId: 'test' });
-    return prisma.shift.create({
+  return runWithTenant({ companyId, isImpersonatingCompany: false, actorUserId: 'test' }, async () =>
+    prisma.shift.create({
       data: {
         name: 'Morning',
         startTime: '08:00',
@@ -206,16 +221,15 @@ export async function createShift(overrides: Record<string, unknown> = {}) {
         ...overrides,
         companyId,
       } as never,
-    });
-  });
+    }),
+  );
 }
 
 export async function createLocation(overrides: Record<string, unknown> = {}) {
   const companyId = (overrides.companyId as string | undefined) ?? (await ensureDefaultCompany());
-  return runWithTenant({ companyId, isImpersonatingCompany: false, actorUserId: 'test' }, async () => {
-    enterTenant({ companyId, isImpersonatingCompany: false, actorUserId: 'test' });
-    return prisma.location.create({
+  return runWithTenant({ companyId, isImpersonatingCompany: false, actorUserId: 'test' }, async () =>
+    prisma.location.create({
       data: { name: 'Main Branch', code: 'LOC-001', ...overrides, companyId } as never,
-    });
-  });
+    }),
+  );
 }
