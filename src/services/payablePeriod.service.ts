@@ -46,8 +46,19 @@ export function calendarPeriodDays(dateFrom: Date, dateTo: Date): number {
 }
 
 /**
+ * True when the requested window looks like a full payroll month (≈28–31 days),
+ * not a weekly shift-grid export (~7 days). Fixed-30 must not apply to weeks.
+ */
+export function isPayrollLengthSpan(scheduledSpanDays: number, fixedMonthDays: number): boolean {
+  const threshold = Math.min(28, Math.max(1, fixedMonthDays - 2));
+  return scheduledSpanDays >= threshold;
+}
+
+/**
  * Days used as the payable base for «أيام العمل الفعلية».
- * Fixed mode → fixedMonthDays once the cycle ends; mid-cycle → elapsed calendar days (26→today).
+ * Fixed mode on a full payroll month → fixedMonthDays once the cycle ends;
+ * mid-cycle → elapsed calendar days (26→today).
+ * Short windows (weekly punch report) → calendar length of that window only.
  * Otherwise → calendar length capped at today while the period is still open.
  */
 export function resolvePayablePeriodDays(
@@ -61,26 +72,31 @@ export function resolvePayablePeriodDays(
   const today = utcDateOnly(asOf);
   const effectiveEnd =
     today.getTime() < scheduledEnd.getTime() ? today : scheduledEnd;
+  const scheduledSpan = calendarPeriodDays(from, scheduledEnd);
 
   if (policy.fixedMonthDaysEnabled) {
     if (effectiveEnd.getTime() < scheduledEnd.getTime()) {
       return calendarPeriodDays(from, effectiveEnd);
     }
-    return Math.max(1, policy.fixedMonthDays);
+    if (isPayrollLengthSpan(scheduledSpan, policy.fixedMonthDays)) {
+      return Math.max(1, policy.fixedMonthDays);
+    }
+    return Math.max(1, scheduledSpan);
   }
   return calendarPeriodDays(from, effectiveEnd);
 }
 
-/** Full payroll cycle length (fixed setting or full calendar span), not capped at today. */
+/** Full period length for summaries: fixed 30 only for payroll-length windows. */
 export function resolveFullPayrollPeriodDays(
   dateFrom: Date,
   dateTo: Date,
   policy: PayablePeriodPolicy = DEFAULT_PAYABLE_PERIOD_POLICY,
 ): number {
-  if (policy.fixedMonthDaysEnabled) {
+  const span = calendarPeriodDays(dateFrom, dateTo);
+  if (policy.fixedMonthDaysEnabled && isPayrollLengthSpan(span, policy.fixedMonthDays)) {
     return Math.max(1, policy.fixedMonthDays);
   }
-  return calendarPeriodDays(dateFrom, dateTo);
+  return Math.max(1, span);
 }
 
 export function payablePeriodConfigJson(config: Partial<BioTimeConfig> | null | undefined) {

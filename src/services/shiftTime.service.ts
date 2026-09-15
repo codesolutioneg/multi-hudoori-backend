@@ -150,11 +150,59 @@ function isNonWorkDayContext(day: PunchDayShiftContext): boolean {
 }
 
 /**
- * Decide whether an early-morning punch belongs to yesterday's overnight shift
- * or to today's schedule.
+ * Day shift ends before midnight (e.g. 21:30) but late checkout may spill past
+ * 00:00. Return true when punchHour (on the next calendar morning) is still
+ * inside end + late window wrapped past midnight — capped so we do not steal
+ * today's early check-in.
+ */
+export function isWithinDayShiftPastMidnightCheckoutWindow(
+  punchHour: number,
+  shift: { endTime: string; lateCheckoutThreshold?: number | null },
+  options: OvernightCheckoutWindowOptions = {},
+): boolean {
+  const endH = parseTimeToFloat(shift.endTime);
+  // Overnight ends are already handled by isWithinOvernightCheckoutWindow.
+  if (endH < 12) return false;
+
+  const threshold =
+    options.lateCheckoutHours != null && Number.isFinite(options.lateCheckoutHours)
+      ? Number(options.lateCheckoutHours)
+      : resolveLateCheckoutHours(shift);
+  const softGrace =
+    options.softGraceHours != null ? Math.max(0, options.softGraceHours) : OVERNIGHT_CHECKOUT_SOFT_GRACE_HOURS;
+  // Hours after midnight still belonging to yesterday's day shift.
+  let pastMidnightCutoff = endH + threshold + softGrace - 24;
+  if (pastMidnightCutoff <= 0) return false;
+
+  if (options.nextShiftStartHour != null && Number.isFinite(options.nextShiftStartHour)) {
+    const early = options.nextShiftEarlyCheckinHours ?? DEFAULT_EARLY_CHECKIN_HOURS;
+    const nextEarlyBound = Number(options.nextShiftStartHour) - early;
+    pastMidnightCutoff = Math.min(pastMidnightCutoff, nextEarlyBound - 1 / 60);
+  }
+
+  return punchHour <= pastMidnightCutoff;
+}
+
+function distanceToPrevExpectedOut(
+  punchHour: number,
+  prevShift: { startTime: string; endTime: string; isOvernight: boolean },
+  lateCheckoutHours: number,
+): number {
+  const endH = parseTimeToFloat(prevShift.endTime);
+  if (prevShift.isOvernight || endH < 12) {
+    return Math.abs(punchHour - endH);
+  }
+  // Day shift ended yesterday evening; expected late out sits just after midnight.
+  const expectedOnNextMorning = endH + lateCheckoutHours - 24;
+  return Math.abs(punchHour - expectedOnNextMorning);
+}
+
+/**
+ * Decide whether an early-morning punch belongs to yesterday's shift
+ * (overnight OR day shift that spilled past midnight) or to today's schedule.
  *
  * Beyond the formal late-checkout window (end + threshold), HR still wants:
- * - following **إجازة / no shift** → keep the punch on yesterday's overnight
+ * - following **إجازة / no shift** → keep the punch on yesterday
  *   (07:20 after a 16:00→01:00 C.4 must not sit alone on the leave day);
  * - following **day shift** → nearest of (prev expected out, today expected in).
  */
@@ -171,9 +219,10 @@ export function resolveOvernightMorningAttribution(params: {
   const todayNonWork = isNonWorkDayContext(today);
   const todayDayShift = today.shift && !today.shift.isOvernight ? today.shift : null;
   const todayStart = todayDayShift ? parseTimeToFloat(todayDayShift.startTime) : null;
+  const prevShift = prev.shift;
 
   // HR: check-in on the same calendar day as a scheduled day shift counts for that day
-  // (e.g. 06:00 IN for a 16:00 shift), even when yesterday was overnight.
+  // (e.g. 06:00 IN for a 16:00 shift), even when yesterday was overnight / late spill.
   if (
     isCheckIn === true &&
     todayDayShift &&
@@ -183,18 +232,21 @@ export function resolveOvernightMorningAttribution(params: {
     return { handled: true, usePreviousDay: false, reason: 'early_checkin' };
   }
 
-  const prevLateBand = prev.shift?.isOvernight
-    ? parseTimeToFloat(prev.shift.endTime) + lateCheckoutHours + 0.25
-    : 6;
+  const prevLateBand = prevShift?.isOvernight
+    ? parseTimeToFloat(prevShift.endTime) + lateCheckoutHours + 0.25
+    : prevShift && !prevShift.isOvernight
+      ? Math.max(6, parseTimeToFloat(prevShift.endTime) + lateCheckoutHours + 0.25 - 24)
+      : 6;
   const morningGate = Math.max(6, prevLateBand);
 
-  const considerPrevOvernight =
-    !!prev.shift?.isOvernight &&
-    (punchHour < morningGate ||
-      (todayNonWork && punchHour < 12) ||
-      (isCheckIn !== true && todayStart != null && punchHour < todayStart));
+  const morningish =
+    punchHour < morningGate ||
+    (todayNonWork && punchHour < 12) ||
+    (isCheckIn !== true && todayStart != null && punchHour < todayStart);
 
-  if (!considerPrevOvernight || !prev.shift?.isOvernight) {
+  const considerPrevLateOut = !!prevShift && morningish;
+
+  if (!considerPrevLateOut || !prevShift) {
     if (punchHour < morningGate && todayDayShift) {
       return { handled: true, usePreviousDay: false, reason: 'early_checkin' };
     }
@@ -204,13 +256,19 @@ export function resolveOvernightMorningAttribution(params: {
     return { handled: false, usePreviousDay: false, reason: 'skipped' };
   }
 
-  if (
-    isWithinOvernightCheckoutWindow(punchHour, prev.shift, {
-      lateCheckoutHours,
-      nextShiftStartHour: todayStart,
-      nextShiftEarlyCheckinHours: earlyCheckinHours,
-    })
-  ) {
+  const inLateWindow = prevShift.isOvernight
+    ? isWithinOvernightCheckoutWindow(punchHour, prevShift, {
+        lateCheckoutHours,
+        nextShiftStartHour: todayStart,
+        nextShiftEarlyCheckinHours: earlyCheckinHours,
+      })
+    : isWithinDayShiftPastMidnightCheckoutWindow(punchHour, prevShift, {
+        lateCheckoutHours,
+        nextShiftStartHour: todayStart,
+        nextShiftEarlyCheckinHours: earlyCheckinHours,
+      });
+
+  if (inLateWindow) {
     return { handled: true, usePreviousDay: true, reason: 'overnight_window' };
   }
 
@@ -219,7 +277,7 @@ export function resolveOvernightMorningAttribution(params: {
   }
 
   if (todayDayShift && todayStart != null) {
-    const distPrev = Math.abs(punchHour - parseTimeToFloat(prev.shift.endTime));
+    const distPrev = distanceToPrevExpectedOut(punchHour, prevShift, lateCheckoutHours);
     const distToday = Math.abs(punchHour - todayStart);
     if (distPrev <= distToday) {
       return { handled: true, usePreviousDay: true, reason: 'proximity_prev' };

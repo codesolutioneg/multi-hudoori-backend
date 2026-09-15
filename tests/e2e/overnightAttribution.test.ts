@@ -64,4 +64,78 @@ describe('overnight shift punch attribution', () => {
     // No stray line on 2026-06-02 carrying the after-midnight punch.
     expect(lines.some((l) => l.punchDate.toISOString().slice(0, 10) === '2026-06-02' && (l.punchCount || 0) > 0)).toBe(false);
   });
+
+  it('keeps an after-midnight checkout on the same day-shift work-date (B.12.5 style)', async () => {
+    const shift = await createShift({
+      name: 'B.12.5',
+      startTime: '12:30',
+      endTime: '21:30',
+      isOvernight: false,
+      lateCheckoutThreshold: 4,
+    });
+    const employee = await prisma.employeeProfile.create({
+      data: { name: 'Day Spill', code: 'D100', basicSalary: 3000 },
+    });
+    const grid = await prisma.shiftGrid.create({
+      data: { name: 'Day grid', dateFrom: new Date('2026-06-01'), dateTo: new Date('2026-06-03') },
+    });
+    await prisma.shiftGridLine.create({
+      data: {
+        gridId: grid.id,
+        employeeId: employee.id,
+        date: new Date('2026-06-01T00:00:00.000Z'),
+        shiftId: shift.id,
+      },
+    });
+    await prisma.shiftGridLine.create({
+      data: {
+        gridId: grid.id,
+        employeeId: employee.id,
+        date: new Date('2026-06-02T00:00:00.000Z'),
+        shiftId: shift.id,
+      },
+    });
+    // Check-in 11:47 on 06-01, check-out 00:00:28 on 06-02 (wall-clock UTC digits).
+    await prisma.transaction.create({
+      data: {
+        employeeId: employee.id,
+        empCode: 'D100',
+        biotimeTransactionId: 960001,
+        punchTime: new Date(Date.UTC(2026, 5, 1, 11, 47)),
+        punchState: '0',
+      },
+    });
+    await prisma.transaction.create({
+      data: {
+        employeeId: employee.id,
+        empCode: 'D100',
+        biotimeTransactionId: 960002,
+        punchTime: new Date(Date.UTC(2026, 5, 2, 0, 0, 28)),
+        punchState: '1',
+      },
+    });
+
+    const lines = await generatePunchReport(
+      new Date('2026-06-01'),
+      new Date('2026-06-03'),
+      [employee.id],
+      grid.id,
+      true,
+    );
+
+    const june1 = lines.find(
+      (l) => l.employeeId === employee.id && l.punchDate.toISOString().slice(0, 10) === '2026-06-01',
+    );
+    expect(june1?.punchCount).toBe(2);
+    expect(june1?.checkInCount).toBe(1);
+    expect(june1?.checkOutCount).toBe(1);
+    // Checkout must not open a bogus IN-only row on 06-02.
+    const june2Punches = lines.filter(
+      (l) =>
+        l.employeeId === employee.id &&
+        l.punchDate.toISOString().slice(0, 10) === '2026-06-02' &&
+        (l.punchCount || 0) > 0,
+    );
+    expect(june2Punches).toHaveLength(0);
+  });
 });

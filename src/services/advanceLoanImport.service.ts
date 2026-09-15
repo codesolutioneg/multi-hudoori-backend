@@ -31,9 +31,7 @@ async function eligibilityPeriodForBatch(batch: {
   });
   const monthStartDay = config?.payrollMonthStartDay ?? 26;
   const { dateFrom, dateTo } = payrollMonthRange(batch.date, monthStartDay);
-  const today = parseDay(new Date());
-  const cappedTo = today.getTime() < dateTo.getTime() ? today : dateTo;
-  return { dateFrom, dateTo: cappedTo };
+  return { dateFrom, dateTo };
 }
 
 function parseDay(raw?: string | Date): Date {

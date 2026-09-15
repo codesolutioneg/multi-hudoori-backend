@@ -55,6 +55,49 @@ describe('payable period policy', () => {
     ).toBe(28);
   });
 
+  it('must not pre-cap dateTo to today (loan-import bug → false full 30)', () => {
+    // Punch report / fixed eligibility pass the scheduled month end; asOf=today
+    // yields elapsed days. Pre-capping dateTo=today on a mid-cycle window must
+    // still return elapsed calendar days — not jump to fixed 30.
+    const policy = {
+      fixedMonthDaysEnabled: true,
+      fixedMonthDays: 30,
+      absentForgivenDaysCount: 4,
+    };
+    const asOf = day('2026-09-14');
+    expect(
+      resolvePayablePeriodDays(day('2026-08-26'), day('2026-09-25'), policy, asOf),
+    ).toBe(20);
+    expect(
+      resolvePayablePeriodDays(day('2026-08-26'), asOf, policy, asOf),
+    ).toBe(20);
+  });
+
+  it('weekly punch-report windows use calendar days, not fixed 30', () => {
+    const policy = {
+      fixedMonthDaysEnabled: true,
+      fixedMonthDays: 30,
+      absentForgivenDaysCount: 4,
+    };
+    // Closed week (like Brisk strip 30 Aug → 5 Sep exported after the week ended).
+    expect(
+      resolvePayablePeriodDays(day('2026-08-30'), day('2026-09-05'), policy, day('2026-09-14')),
+    ).toBe(7);
+    expect(resolveFullPayrollPeriodDays(day('2026-08-30'), day('2026-09-05'), policy)).toBe(7);
+  });
+
+  it('full payroll month still resolves to fixed 30 when the cycle has ended', () => {
+    const policy = {
+      fixedMonthDaysEnabled: true,
+      fixedMonthDays: 30,
+      absentForgivenDaysCount: 4,
+    };
+    expect(
+      resolvePayablePeriodDays(day('2026-08-26'), day('2026-09-25'), policy, day('2026-09-26')),
+    ).toBe(30);
+    expect(resolveFullPayrollPeriodDays(day('2026-08-26'), day('2026-09-25'), policy)).toBe(30);
+  });
+
   it('caps open periods at today when fixed mode is off', () => {
     expect(
       resolvePayablePeriodDays(

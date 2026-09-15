@@ -12,6 +12,9 @@
 
 ## Daily log
 
+### 2026-09-15
+- **Auto**: Ported single-company prod punch/loan fixes from `/root/hodouri`: loan-import `eligibilityPeriodForBatch` no longer pre-caps `dateTo`; `isPayrollLengthSpan` so weekly reports stay ~7 days not fixed-30; day-shift past-midnight checkout attribution (`isWithinDayShiftPastMidnightCheckoutWindow`); unit tests updated. **MULTI**.
+
 ### 2026-09-13
 - **Auto**: Scaffold — copied Dev backend into `/root/hudoori-multi/backend` (excluded node_modules, dist, .env*, uploads, storage). Fresh git repo, no remotes. Created empty Postgres DB `hudoori_multi_dev` on biotime_postgres:5434. Local `.env.dev` on PORT `3003`. **MULTI**.
 - **Auto**: Multi-tenant schema baseline — `Company` model + `companyId` on all operational tables; composite uniques; migration `20260913120000_multi_tenant_baseline`. Seed platform admin only (no global BioTime/Odoo). **MULTI**.

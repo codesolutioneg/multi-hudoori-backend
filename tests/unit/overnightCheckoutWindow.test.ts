@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isWithinOvernightCheckoutWindow,
+  isWithinDayShiftPastMidnightCheckoutWindow,
   getWorkDateForPunch,
   resolveLateCheckoutHours,
   resolveOvernightMorningAttribution,
@@ -90,6 +91,21 @@ describe('dynamic overnight checkout window', () => {
     });
     const punch = new Date(Date.UTC(2026, 6, 11, 5, 0, 0));
     expect(getWorkDateForPunch(shift, punch).toISOString().slice(0, 10)).toBe('2026-07-10');
+  });
+
+  it('day-shift past-midnight window keeps 00:28 after 21:30 end + 4h', () => {
+    expect(
+      isWithinDayShiftPastMidnightCheckoutWindow(0 + 28 / 3600, {
+        endTime: '21:30',
+        lateCheckoutThreshold: 4,
+      }, { lateCheckoutHours: 4 }),
+    ).toBe(true);
+    expect(
+      isWithinDayShiftPastMidnightCheckoutWindow(3, {
+        endTime: '21:30',
+        lateCheckoutThreshold: 4,
+      }, { lateCheckoutHours: 4 }),
+    ).toBe(false);
   });
 });
 
@@ -234,5 +250,51 @@ describe('resolveOvernightMorningAttribution', () => {
     });
     expect(r.handled).toBe(true);
     expect(r.usePreviousDay).toBe(true);
+  });
+
+  it('keeps 00:00 checkout on previous day shift B.12.5 (12:30→21:30)', () => {
+    const dayShift = {
+      shift: {
+        startTime: '12:30',
+        endTime: '21:30',
+        isOvernight: false,
+        lateCheckoutThreshold: 4,
+      },
+      isOff: false,
+    };
+    const r = resolveOvernightMorningAttribution({
+      punchHour: 0 + 28 / 3600,
+      prev: dayShift,
+      today: dayShift,
+      lateCheckoutHours: 4,
+      earlyCheckinHours: 2,
+      isCheckIn: false,
+    });
+    expect(r.handled).toBe(true);
+    expect(r.usePreviousDay).toBe(true);
+    expect(r.reason).toBe('overnight_window');
+  });
+
+  it('does not steal 11:00 check-in for next day B.12.5 after previous day spill window', () => {
+    const dayShift = {
+      shift: {
+        startTime: '12:30',
+        endTime: '21:30',
+        isOvernight: false,
+        lateCheckoutThreshold: 4,
+      },
+      isOff: false,
+    };
+    const r = resolveOvernightMorningAttribution({
+      punchHour: 11,
+      prev: dayShift,
+      today: dayShift,
+      lateCheckoutHours: 4,
+      earlyCheckinHours: 2,
+      isCheckIn: true,
+    });
+    expect(r.handled).toBe(true);
+    expect(r.usePreviousDay).toBe(false);
+    expect(r.reason).toBe('early_checkin');
   });
 });
