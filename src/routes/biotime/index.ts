@@ -44,11 +44,16 @@ import requests_2Routes from './requests-2.routes';
 import hiringRoutes from './hiring.routes';
 import hr_reportsRoutes from './hr-reports.routes';
 import shift_grid_mergeRoutes from './shift-grid-merge.routes';
+import shift_grid_monthly_reportsRoutes from './shift-grid-monthly-reports.routes';
 import auditRoutes from './audit.routes';
 import assistantRoutes from './assistant.routes';
 import mobilePunchRoutes from './mobile-punch.routes';
+import { requireAuth } from '../../middlewares/auth';
+import { requireFeatureMiddleware } from '../../middlewares/requireFeature.middleware';
 
 const router = Router();
+router.use(requireAuth);
+router.use(requireFeatureMiddleware);
 router.use(meRoutes);
 router.use(auditRoutes);
 router.use(assistantRoutes);
@@ -97,5 +102,6 @@ router.use(requests_2Routes);
 router.use(hiringRoutes);
 router.use(hr_reportsRoutes);
 router.use(shift_grid_mergeRoutes);
+router.use(shift_grid_monthly_reportsRoutes);
 
 export default router;

@@ -9,8 +9,12 @@ export class BioTimeConnector {
 
   constructor(config: BioTimeConfig) {
     this.config = config;
+    const host = String(config.serverIp ?? '').trim();
+    if (!host) {
+      throw new Error('BioTime server URL is not configured');
+    }
     const protocol = config.useHttps ? 'https' : 'http';
-    this.baseUrl = `${protocol}://${config.serverIp}:${config.serverPort}`;
+    this.baseUrl = `${protocol}://${host}:${config.serverPort}`;
   }
 
   static async fromDb(): Promise<BioTimeConnector> {

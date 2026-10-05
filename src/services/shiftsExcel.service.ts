@@ -225,9 +225,9 @@ export async function exportShiftsXlsx(): Promise<string> {
   writeRowCells(headerRow, HEADERS);
   styleHeaderRow(headerRow);
 
-  const rows =
+  const rows: Array<Array<string | number>> =
     shifts.length > 0
-      ? shifts.map((s) => [
+      ? shifts.map((s: (typeof shifts)[number]) => [
           s.code?.trim() || shiftExportCode(s),
           s.name,
           s.startTime,
@@ -239,7 +239,7 @@ export async function exportShiftsXlsx(): Promise<string> {
         ])
       : [['MORNING', 'صباحي (مثال)', '08:00', '17:00', 'لا', 10, 5, 'نعم']];
 
-  rows.forEach((values, i) => {
+  rows.forEach((values: Array<string | number>, i: number) => {
     const row = sheet.getRow(DATA_START_ROW + i);
     writeRowCells(row, values);
     styleDataRow(row, i % 2 === 1);

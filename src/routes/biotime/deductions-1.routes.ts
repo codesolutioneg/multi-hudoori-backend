@@ -166,6 +166,82 @@ router.post('/deductions/cancel', requireAuth, requireHr, asyncHandler(async (re
   jsonRpcSuccess(res, biotimeOk({ deduction: deductionJson(d) }), req.rpcId);
 }));
 
+/** Hard-delete pending (draft) deductions only — never linked/applied. */
+router.post('/deductions/delete-bulk', requireAuth, requireHr, asyncHandler(async (req, res) => {
+  const rawIds = p(req).ids ?? p(req).deductionIds ?? [];
+  const ids = (Array.isArray(rawIds) ? rawIds : [rawIds])
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean);
+  const uniqueIds = [...new Set(ids)];
+  if (!uniqueIds.length) {
+    throw new AppError('حدد استقطاعات للحذف', 400, 'VALIDATION_ERROR');
+  }
+  if (uniqueIds.length > 2000) {
+    throw new AppError('الحد الأقصى 2000 استقطاع في العملية الواحدة', 400, 'VALIDATION_ERROR');
+  }
+
+  const rows = await prisma.deduction.findMany({
+    where: { id: { in: uniqueIds } },
+    include: { employee: { select: { id: true, name: true, code: true } } },
+  });
+  if (rows.length !== uniqueIds.length) {
+    throw new AppError('بعض الاستقطاعات غير موجودة', 404, 'NOT_FOUND');
+  }
+
+  const blocked = rows.filter((r) => r.state !== DeductionState.draft);
+  if (blocked.length) {
+    throw new AppError(
+      `لا يمكن حذف إلا الاستقطاعات المعلّقة — ${blocked.length} سجل غير معلّق`,
+      400,
+      'ACTION_ERROR',
+    );
+  }
+
+  await prisma.deduction.deleteMany({ where: { id: { in: uniqueIds } } });
+
+  const totalAmount = rows.reduce((s, r) => s + (r.amount ?? 0), 0);
+  await writeAudit({
+    req,
+    module: 'deductions',
+    action: 'deductions.delete_bulk',
+    entityType: 'Deduction',
+    entityId: '',
+    summary: `حذف ${rows.length} استقطاع معلّق — إجمالي ${totalAmount.toFixed(2)}`,
+    counts: { deleted: rows.length, totalAmount },
+    diffPreview: rows.slice(0, 200).map((r) => ({
+      entityId: r.employee?.code ?? r.employeeId,
+      entityLabel: r.employee?.name ?? r.employeeId,
+      field: 'amount',
+      before: r.amount,
+      after: null,
+      note: [r.reference, r.type].filter(Boolean).join(' · '),
+    })),
+    payload: {
+      ids: uniqueIds,
+      deleted: rows.map((r) => ({
+        id: r.id,
+        reference: r.reference,
+        type: r.type,
+        amount: r.amount,
+        employeeCode: r.employee?.code,
+        employeeName: r.employee?.name,
+        date: r.date,
+      })),
+    },
+    route: '/deductions/delete-bulk',
+  });
+
+  jsonRpcSuccess(
+    res,
+    biotimeOk({
+      deleted: rows.length,
+      totalAmount,
+      message: `تم حذف ${rows.length} استقطاع معلّق`,
+    }),
+    req.rpcId,
+  );
+}));
+
 router.post('/deductions/export-template', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const params = p(req);
   const base64 = await exportDeductionTemplate({

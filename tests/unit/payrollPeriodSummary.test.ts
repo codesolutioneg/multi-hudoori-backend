@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { PayrollLine } from '@prisma/client';
 import {
   buildPeriodPayrollSummaryRow,
+  PERIOD_PAYROLL_SUMMARY_HEADERS,
   sumPeriodPayrollSummaryRows,
 } from '../../src/services/payrollPeriodExports.service';
 import { computePayrollJournalAmounts } from '../../src/services/odoo/payrollJournalAmounts';
@@ -135,6 +136,7 @@ describe('period payroll summary totals', () => {
     const excel = computePayrollExcelSummary(lines);
 
     expect(row.salaries).toBe(excel.grandTotal);
+    expect(row.totalEarnings).toBe(excel.totalEarnings);
     expect(row.companySocial).toBe(journal.companySocial);
     expect(row.penalties).toBe(journal.penalties);
     expect(row.longAdvance).toBe(journal.longTermAdvance);
@@ -191,6 +193,9 @@ describe('period payroll summary totals', () => {
     expect(totals.salaries).toBe(
       Math.round((a.salaries + b.salaries) * 100) / 100,
     );
+    expect(totals.totalEarnings).toBe(
+      Math.round((a.totalEarnings + b.totalEarnings) * 100) / 100,
+    );
     expect(totals.cashTotal).toBe(
       Math.round((a.cashTotal + b.cashTotal) * 100) / 100,
     );
@@ -199,5 +204,15 @@ describe('period payroll summary totals', () => {
     );
     expect(totals.activeEmployeeCount).toBe(2);
     expect(totals.lineCount).toBe(2);
+  });
+
+  it('places grand total after Fawry commission, then total earnings', () => {
+    const commissionIndex = PERIOD_PAYROLL_SUMMARY_HEADERS.indexOf(
+      'عمولة فوري (0.15%)',
+    );
+    expect(PERIOD_PAYROLL_SUMMARY_HEADERS[commissionIndex + 1]).toBe('إجمالي');
+    expect(PERIOD_PAYROLL_SUMMARY_HEADERS[commissionIndex + 2]).toBe(
+      'إجمالي الاستحقاقات',
+    );
   });
 });

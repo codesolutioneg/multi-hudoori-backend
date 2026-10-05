@@ -81,15 +81,30 @@ enum AdvanceRequestState {
   cancelled
 }
 
+enum CompanyFeatureSource {
+  PLAN_SNAPSHOT
+  ADMIN_OVERRIDE
+}
+
 model Company {
   id        String   @id @default(cuid())
   /// Login identifier employees type on the sign-in screen (case-insensitive unique).
   code      String   @unique
   name      String
   active    Boolean  @default(true)
+  /// SaaS seats: max employee_profiles rows (archived included). Null = unlimited. Enforced by DB trigger.
+  maxEmployees Int?  @map("max_employees")
+  /// SaaS seats: max dashboard users (not EMPLOYEE / PLATFORM_ADMIN). Null = unlimited. Enforced by DB trigger.
+  maxUsers     Int?  @map("max_users")
+  /// Reference plan at subscribe time (display only; entitlements live in company_features).
+  subscriptionPlanId String? @map("subscription_plan_id")
+  subscriptionPlan   SubscriptionPlan? @relation("CompanySubscriptionPlan", fields: [subscriptionPlanId], references: [id], onDelete: SetNull)
+  planNameAr         String? @map("plan_name_ar")
+  planNameEn         String? @map("plan_name_en")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  companyFeatures            CompanyFeature[]
   users                      User[]
   userFeatureGrants          UserFeatureGrant[]
   auditLogs                  AuditLog[]
@@ -137,8 +152,27 @@ model Company {
   attendanceEditRequests     AttendanceEditRequest[]
   overtimeAnalyses           OvertimeAnalysis[]
   hiringAppointments         HiringAppointment[]
+  approvedSalesRequests      SalesRequest[]
 
+  @@index([subscriptionPlanId])
   @@map("companies")
+}
+
+/// Frozen product entitlements per company (copied on sales approve; overrides do not change when plan edits).
+model CompanyFeature {
+  id         String               @id @default(cuid())
+  companyId  String               @map("company_id")
+  featureKey String               @map("feature_key")
+  enabled    Boolean              @default(true)
+  source     CompanyFeatureSource @default(PLAN_SNAPSHOT)
+  createdAt  DateTime             @default(now()) @map("created_at")
+  updatedAt  DateTime             @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, featureKey])
+  @@index([companyId, enabled])
+  @@map("company_features")
 }
 
 model User {
@@ -1579,6 +1613,72 @@ model HiringAppointment {
   @@index([status, hrSeenAt])
   @@index([companyId])
   @@map("hiring_appointments")
+}
+
+enum SubscriptionPlanStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum SalesRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Landing pricing packages — edited from Super Admin; never hard-deleted (DRAFT keeps history).
+model SubscriptionPlan {
+  id                   String                 @id @default(cuid())
+  slug                 String                 @unique
+  nameAr               String                 @map("name_ar")
+  nameEn               String                 @map("name_en")
+  descriptionAr        String?                @map("description_ar")
+  descriptionEn        String?                @map("description_en")
+  priceDisplayAr       String                 @map("price_display_ar")
+  priceDisplayEn       String                 @map("price_display_en")
+  featuresAr           Json                   @default("[]") @map("features_ar")
+  featuresEn           Json                   @default("[]") @map("features_en")
+  defaultMaxEmployees  Int?                   @map("default_max_employees")
+  defaultMaxUsers      Int?                   @map("default_max_users")
+  /// Entitlement keys from feature catalog (dynamic binding for new plans).
+  featureKeys          Json                   @default("[]") @map("feature_keys")
+  sortOrder            Int                    @default(0) @map("sort_order")
+  highlighted          Boolean                @default(false)
+  status               SubscriptionPlanStatus @default(DRAFT)
+  createdAt            DateTime               @default(now()) @map("created_at")
+  updatedAt            DateTime               @updatedAt @map("updated_at")
+
+  salesRequests SalesRequest[]
+  companies     Company[]      @relation("CompanySubscriptionPlan")
+
+  @@map("subscription_plans")
+}
+
+/// Contact-sales form submissions from the marketing landing page.
+model SalesRequest {
+  id                 String             @id @default(cuid())
+  companyCode        String             @map("company_code")
+  companyName        String             @map("company_name")
+  contactName        String             @map("contact_name")
+  email              String
+  phone              String
+  requestedEmployees Int                @map("requested_employees")
+  planId             String?            @map("plan_id")
+  plan               SubscriptionPlan?  @relation(fields: [planId], references: [id], onDelete: SetNull)
+  status             SalesRequestStatus @default(PENDING)
+  rejectionReason    String?            @map("rejection_reason")
+  notes              String?
+  createdCompanyId   String?            @map("created_company_id")
+  createdCompany     Company?           @relation(fields: [createdCompanyId], references: [id], onDelete: SetNull)
+  reviewedAt         DateTime?          @map("reviewed_at")
+  reviewedByUserId   String?            @map("reviewed_by_user_id")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([companyCode])
+  @@index([email])
+  @@map("sales_requests")
 }
 
 /// Public mobile app version catalog (used by external mobile clients).

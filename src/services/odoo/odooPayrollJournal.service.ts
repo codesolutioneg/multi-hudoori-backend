@@ -11,6 +11,7 @@ import {
   buildPayrollJournalMoveLines,
   computePayrollCashFawrySummary,
   computePayrollJournalAmounts,
+  resolvePayrollLineEarnings,
   type PayrollCashFawrySummary,
   type PayrollJournalAmounts,
   type PayrollJournalMoveLine,
@@ -24,6 +25,40 @@ import {
 
 type OdooSession = Awaited<ReturnType<typeof authenticateOdooOrm>>;
 type PayrollForJournal = Awaited<ReturnType<typeof loadPayrollForJournal>>;
+
+/** Map raw Odoo/Python faults to a short Arabic message for the UI. */
+function humanizeOdooSendError(err: unknown): { message: string; code: string } {
+  const raw = (err instanceof Error ? err.message : String(err || '')).trim();
+  const firstLine = raw.split(/\r?\n/)[0]?.trim() || raw;
+
+  if (/missing 1 required positional argument:\s*'vals'/i.test(raw) || /HrEmployeeBioTimePush\.write/i.test(raw)) {
+    return {
+      message:
+        'فشل تحديث بيانات الموظفين في Odoo قبل إنشاء القيد. لم يُرسل الكشف. راجع الربط أو أعد المحاولة.',
+      code: 'ODOO_EMPLOYEE_SYNC',
+    };
+  }
+  if (/Invalid field|doesn't exist|ValidationError|UserError/i.test(raw)) {
+    return {
+      message: `فشل الإرسال إلى Odoo: ${firstLine.slice(0, 160)}`,
+      code: 'ODOO_VALIDATION',
+    };
+  }
+  if (/authenticate|تسجيل الدخول|AccessDenied|XML-RPC/i.test(raw)) {
+    return {
+      message: 'فشل الاتصال بـ Odoo. تحقق من إعدادات الربط ثم أعد المحاولة.',
+      code: 'ODOO_AUTH',
+    };
+  }
+  if (!firstLine) {
+    return { message: 'فشل إرسال قيد المرتبات إلى Odoo', code: 'ODOO_JOURNAL_CREATE' };
+  }
+  const clipped = firstLine.length > 180 ? `${firstLine.slice(0, 160)}…` : firstLine;
+  return {
+    message: `فشل إرسال قيد المرتبات إلى Odoo: ${clipped}`,
+    code: 'ODOO_JOURNAL_CREATE',
+  };
+}
 
 export type PayrollJournalPreview = {
   payrollId: string;
@@ -61,6 +96,7 @@ async function loadPayrollForJournal(payrollId: string) {
               code: true,
               insuranceSalary: true,
               medicalInsuranceSalary: true,
+              basicSalary: true,
               hasFawryAccount: true,
               active: true,
               departureDate: true,
@@ -313,7 +349,7 @@ function odooPayrollLineVals(
     overtime_hours: line.overtimeHours,
     overtime_amount: line.overtimeAmount,
     work_days_salary: line.workDaysSalary,
-    total_earnings: line.totalEarnings,
+    total_earnings: resolvePayrollLineEarnings(line),
     late_deduction: line.lateDeduction,
     punch_deduction_checkin: line.punchDeductionCheckin,
     late_checkout_deduction: line.lateCheckoutDeduction,
@@ -576,7 +612,12 @@ export async function sendPayrollJournalToOdoo(payrollId: string): Promise<{
       session,
       payroll.lines.map((line) => line.employeeCode || line.employee?.code || ''),
     );
-    await syncOdooHrEmployeesForPayroll(session, payroll.lines, hrEmployees);
+    try {
+      await syncOdooHrEmployeesForPayroll(session, payroll.lines, hrEmployees);
+    } catch (syncErr) {
+      const mapped = humanizeOdooSendError(syncErr);
+      throw new AppError(mapped.message, 502, mapped.code === 'ODOO_JOURNAL_CREATE' ? 'ODOO_EMPLOYEE_SYNC' : mapped.code);
+    }
     const lineVals = payroll.lines.map((line) =>
       odooPayrollLineVals(
         odooPayrollId,
@@ -598,7 +639,7 @@ export async function sendPayrollJournalToOdoo(payrollId: string): Promise<{
     await persistLineEarnings(
       session,
       lineIds,
-      payroll.lines.map((l) => l.totalEarnings),
+      payroll.lines.map((l) => resolvePayrollLineEarnings(l)),
     );
 
     const payrollRows = await searchRead<{ id: number; name: string }>(
@@ -665,11 +706,8 @@ export async function sendPayrollJournalToOdoo(payrollId: string): Promise<{
       unlinkMove: Boolean(createdMoveId && !existingMoveId),
     });
     if (err instanceof AppError) throw err;
-    throw new AppError(
-      err instanceof Error ? err.message : 'فشل إنشاء قيد المرتبات في Odoo',
-      502,
-      'ODOO_JOURNAL_CREATE',
-    );
+    const mapped = humanizeOdooSendError(err);
+    throw new AppError(mapped.message, 502, mapped.code);
   }
 
   const posted = await readJournalRow(session, odooJournalId);

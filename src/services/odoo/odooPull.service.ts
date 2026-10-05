@@ -11,6 +11,7 @@ import {
 import { prisma } from '../../prisma/client';
 import { requireCompanyId } from '../../tenant/context';
 import { logger } from '../../utils/logger';
+import { isQuotaError } from '../licenseQuota.service';
 import { floatToTimeString, computeIsOvernight } from '../shiftCalculations.service';
 import * as odooClient from './odooClient.service';
 
@@ -224,6 +225,10 @@ export async function pullEmployeesFromOdoo(stats: OdooPullStats, pageSize = 200
         await saveOdooMap('employee', localId, odooId);
         stats.employees += 1;
       } catch (err) {
+        if (isQuotaError(err)) {
+          logger.warn({ odooId: emp.id }, 'pull employee skipped — company employee quota reached');
+          continue;
+        }
         stats.errors += 1;
         logger.warn({ err, odooId: emp.id }, 'pull employee failed');
       }

@@ -1,9 +1,17 @@
 import ExcelJS from 'exceljs';
-import { AdvanceLoanImportState, AdvanceState } from '@prisma/client';
+import {
+  AdvanceLoanImportState,
+  AdvanceState,
+  Prisma,
+} from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError, NotFoundError } from '../utils/errors';
-import { computeAdvanceEligibility } from './advanceEligibility.service';
-import { createShortAdvance } from './advances.service';
+import {
+  assertAdvanceWithinLimit,
+  computeAdvanceEligibility,
+  eligibilityAuditFields,
+  type AdvanceEligibilityResult,
+} from './advanceEligibility.service';
 import { resolveEmployeeByCode } from './deductionExcel.service';
 import { nextAdvanceLoanImportReference, nextTipImportReference } from './deductionReference.service';
 import { formatLocationDisplay } from './serialize.service';
@@ -17,9 +25,10 @@ import { tipsWorkingDaysByEmployeeIds, punchFollowUpPeriod } from './punchReport
 
 /**
  * Period the loan-import eligibility is measured over. When a source grid is
- * chosen we honour it; otherwise we count the running payroll cycle (from its
- * start day up to today), not a single week — so the working-days gate reflects
- * the days actually elapsed this month.
+ * chosen we honour it; otherwise pass the full payroll cycle window (same as
+ * the punch report). Mid-cycle capping to "today" happens inside
+ * resolvePayablePeriodDays — pre-capping dateTo here falsely treats the month
+ * as complete under fixed-30 and returns 30 working days.
  */
 async function eligibilityPeriodForBatch(batch: {
   sourceGridId: string | null;
@@ -99,7 +108,44 @@ function cellToText(v: unknown): string {
       .join('')
       .trim();
   }
+  // ExcelJS shared formulas / unknown cell objects must not become
+  // the classic JS String(obj) → "[object Object]".
+  if (typeof v === 'object') return '';
   return String(v).trim();
+}
+
+/** Exported for unit tests — Excel cell → plain text. */
+export function excelCellToText(v: unknown): string {
+  return cellToText(v);
+}
+
+function isCorruptImportedName(name: string): boolean {
+  const s = name.trim();
+  if (!s || s === '[object Object]') return true;
+  // Sheets sometimes redact with bullets/asterisks (U+2022) or "...".
+  return /[\u2022*•]|\.\.\.|…/.test(s);
+}
+
+function importedPersonName(
+  cell: unknown,
+  fallback?: string | null,
+): string | null {
+  let name = cellToText(cell);
+  if (isCorruptImportedName(name)) name = '';
+  if (!name && fallback) name = fallback.trim();
+  return name || null;
+}
+
+function displayLoanEmployeeName(
+  stored: string | null | undefined,
+  profileName?: string | null,
+): string {
+  const profile = (profileName ?? '').trim();
+  // Linked employees: profile name is source of truth (avoids sheet redaction).
+  if (profile) return profile;
+  const s = (stored ?? '').trim();
+  if (isCorruptImportedName(s)) return '';
+  return s;
 }
 
 export const LOAN_FILE_AMOUNT_ALIASES = [
@@ -161,7 +207,7 @@ export function findImportHeaderColumn(
 
 export function excelCellHasValue(cell: unknown): boolean {
   if (cell == null) return false;
-  return String(cell).trim() !== '';
+  return cellToText(cell) !== '';
 }
 
 function parseFloatCell(v: unknown, fallback = 0): number {
@@ -326,15 +372,12 @@ async function buildEligibilityMapsFromFile(
 
   for (const row of rows.slice(headerIdx + 1)) {
     if (!row) continue;
-    const code = String(row[codeCol] ?? '')
-      .trim()
-      .replace(/\.0$/, '');
+    const code = normalizeLoanEmployeeCode(row[codeCol]);
     if (!code) continue;
 
     let eligibleAmount =
       eligibleCol >= 0 ? parseFloatCell(row[eligibleCol], 0) : 0;
-    const statusText =
-      statusCol >= 0 ? String(row[statusCol] ?? '').trim() : '';
+    const statusText = statusCol >= 0 ? cellToText(row[statusCol]) : '';
     const parsedStatus = parseEligibilityStatus(statusText);
     const requestedInSheet =
       requestedCol >= 0 ? parseFloatCell(row[requestedCol], 0) : 0;
@@ -446,21 +489,36 @@ export function advanceLoanImportLineJson(line: {
   isFawry?: boolean;
   ineligibilityReason?: string | null;
   employee?: {
+    name?: string | null;
     jobTitle: string | null;
+    hiringDate?: Date | string | null;
+    hasFawryAccount: boolean;
+    fawryAccount: string | null;
     workLocation?: { name: string; actualName?: string | null } | null;
   } | null;
-}) {
+}, options?: { useCurrentEmployeePaymentChannel?: boolean }) {
+  const isFawry = options?.useCurrentEmployeePaymentChannel && line.employee
+    ? employeeIsFawry(line.employee)
+    : line.isFawry === true;
+  const hiringRaw = line.employee?.hiringDate;
+  const hiringDate =
+    hiringRaw instanceof Date
+      ? hiringRaw.toISOString().slice(0, 10)
+      : typeof hiringRaw === 'string' && hiringRaw.trim()
+        ? hiringRaw.trim().slice(0, 10)
+        : '';
   return {
     id: line.id,
     importId: line.importId,
     employeeId: line.employeeId,
     employeeCode: line.employeeCode ?? '',
-    employeeName: line.employeeName ?? '',
+    employeeName: displayLoanEmployeeName(line.employeeName, line.employee?.name),
     jobTitle: line.employee?.jobTitle ?? '',
     locationName: formatLocationDisplay(
       line.employee?.workLocation?.name,
       line.employee?.workLocation?.actualName,
     ),
+    hiringDate,
     requestedAmount: line.requestedAmount,
     eligibleAmount: line.eligibleAmount,
     systemEligibleAmount: line.systemEligibleAmount,
@@ -473,7 +531,7 @@ export function advanceLoanImportLineJson(line: {
     repaymentMonths: line.repaymentMonths,
     shortAdvanceId: line.shortAdvanceId,
     note: line.note ?? '',
-    isFawry: line.isFawry === true,
+    isFawry,
     ineligibilityReason: line.ineligibilityReason ?? '',
   };
 }
@@ -521,6 +579,7 @@ export async function getAdvanceLoanImport(id: string) {
               code: true,
               name: true,
               jobTitle: true,
+              hiringDate: true,
               hasFawryAccount: true,
               fawryAccount: true,
               workLocation: { select: { id: true, name: true, actualName: true } },
@@ -531,6 +590,8 @@ export async function getAdvanceLoanImport(id: string) {
     },
   });
   if (!batch) throw new NotFoundError('Advance loan import not found');
+  const useCurrentPaymentChannel =
+    batch.state === AdvanceLoanImportState.draft;
   const enrichedLines = await enrichLoanImportLinesWithShortAdvanceState(batch.lines);
   const summary = summarizeLoanImportBatch(
     enrichedLines.map((line) => ({
@@ -544,7 +605,9 @@ export async function getAdvanceLoanImport(id: string) {
       note: line.note,
       rowReason: line.rowReason,
       repaymentMonths: line.repaymentMonths,
-      isFawry: line.isFawry,
+      isFawry: useCurrentPaymentChannel && line.employee
+        ? employeeIsFawry(line.employee)
+        : line.isFawry,
       shortAdvance: line.shortAdvance,
       employee: line.employee,
     })),
@@ -552,7 +615,11 @@ export async function getAdvanceLoanImport(id: string) {
   return {
     ...advanceLoanImportJson({
       ...batch,
-      lines: batch.lines.map(advanceLoanImportLineJson),
+      lines: batch.lines.map((line) =>
+        advanceLoanImportLineJson(line, {
+          useCurrentEmployeePaymentChannel: useCurrentPaymentChannel,
+        }),
+      ),
     }),
     ...summary,
   };
@@ -795,7 +862,42 @@ export async function listAdvanceLoanImports(
   const items = await Promise.all(
     rows.map(async (r) => {
       const lines = await enrichLoanImportLinesWithShortAdvanceState(r.lines);
-      const summary = summarizeLoanImportBatch(lines);
+      const useCurrentPaymentChannel =
+        r.state === AdvanceLoanImportState.draft;
+      const summary = summarizeLoanImportBatch(
+        lines.map((line) => ({
+          ...line,
+          isFawry: useCurrentPaymentChannel && line.employee
+            ? employeeIsFawry(line.employee)
+            : line.isFawry,
+        })),
+      );
+      const employeesByCode = new Map<
+        string,
+        { code: string; name: string; jobTitle: string; amount: number }
+      >();
+      for (const line of lines) {
+        const code = (line.employeeCode || line.employee?.code || '')
+          .trim()
+          .replace(/\.0$/, '');
+        if (!code) continue;
+        const name =
+          (line.employee?.name || line.employeeName || '').trim() || code;
+        const jobTitle = (line.employee?.jobTitle || '').trim();
+        const amount =
+          Number(line.approvedAmount) > 0
+            ? Number(line.approvedAmount)
+            : Number(line.requestedAmount) || 0;
+        const existing = employeesByCode.get(code);
+        if (existing) {
+          existing.amount += amount;
+          if (!existing.name || existing.name === code) existing.name = name;
+          if (!existing.jobTitle && jobTitle) existing.jobTitle = jobTitle;
+        } else {
+          employeesByCode.set(code, { code, name, jobTitle, amount });
+        }
+      }
+      const employees = [...employeesByCode.values()];
       return {
         id: r.id,
         reference: r.reference,
@@ -803,6 +905,8 @@ export async function listAdvanceLoanImports(
         date: r.date.toISOString().slice(0, 10),
         state: r.state,
         lineCount: r._count.lines,
+        employeeCodes: employees.map((e) => e.code),
+        employees,
         odooAccountsSendId: r.odooAccountsSendId,
         odooMoveId: r.odooMoveId,
         odooSendRef: r.odooSendRef ?? '',
@@ -831,6 +935,98 @@ export async function deleteAdvanceLoanImportDraft(id: string) {
   }
   await prisma.advanceLoanImport.delete({ where: { id } });
   return { deleted: true, id };
+}
+
+/** Delete one review row from a draft import. Locked / already-approved lines blocked. */
+export async function deleteAdvanceLoanImportLine(lineId: string) {
+  const line = await prisma.advanceLoanImportLine.findUnique({
+    where: { id: lineId },
+    include: { import: { select: { id: true, state: true } } },
+  });
+  if (!line) throw new NotFoundError('Line not found');
+  if (line.import.state === AdvanceLoanImportState.locked) {
+    throw new AppError('الاستيراد مقفول — لا يمكن حذف السطر', 400, 'ACTION_ERROR');
+  }
+  if (line.shortAdvanceId) {
+    throw new AppError('السطر معتمد بالفعل — لا يمكن حذفه', 400, 'ACTION_ERROR');
+  }
+  await prisma.advanceLoanImportLine.delete({ where: { id: lineId } });
+  await freezeLoanImportPaymentSnapshot(line.importId);
+  return { deleted: true, id: lineId, importId: line.importId };
+}
+
+/**
+ * Recompute system eligible amount / status / reason only.
+ * Does not touch requested, approved, toApprove, days, Fawry, or other edited columns.
+ */
+export async function recalculateImportEligibleAmountsOnly(importId: string) {
+  const batch = await prisma.advanceLoanImport.findUnique({
+    where: { id: importId },
+    include: { lines: true },
+  });
+  if (!batch) throw new NotFoundError('Advance loan import not found');
+  if (batch.state === AdvanceLoanImportState.locked) {
+    throw new AppError('الاستيراد مقفول', 400, 'ACTION_ERROR');
+  }
+  if (batch.kind === 'tip') {
+    return { importId, updated: 0, lines: [] as string[] };
+  }
+
+  const eligPeriod = await eligibilityPeriodForBatch(batch);
+  let updated = 0;
+  const changedCodes: string[] = [];
+
+  for (const line of batch.lines) {
+    if (!line.employeeId) continue;
+
+    let systemEligibleAmount = 0;
+    let compareStatus = 'not_eligible';
+    let ineligibilityReason: string | null = null;
+    try {
+      const elig = await computeAdvanceEligibility({
+        employeeId: line.employeeId,
+        ...eligPeriod,
+      });
+      systemEligibleAmount = elig.availableAmount;
+      if (!elig.isEligible || systemEligibleAmount <= 0) {
+        compareStatus = 'not_eligible';
+      } else {
+        compareStatus = 'ready';
+      }
+      if (!elig.isEligible) {
+        ineligibilityReason = `أيام العمل الفعلية (${elig.actualWorkingDays}) أقل من الحد الأدنى (${elig.minimumWorkingDays})`;
+      } else if (elig.availableAmount <= 0) {
+        ineligibilityReason = `لا يوجد مبلغ متاح — الحد ${elig.maxEligibleAmount} بعد خصم سلف قصيرة قائمة ${elig.committedAdvanceTotal}`;
+      }
+    } catch {
+      systemEligibleAmount = 0;
+      compareStatus = 'not_eligible';
+      ineligibilityReason = 'تعذر حساب الاستحقاق';
+    }
+
+    const eligibleAmount = systemEligibleAmount;
+    const changed =
+      Math.abs((line.eligibleAmount || 0) - eligibleAmount) > 0.009 ||
+      Math.abs((line.systemEligibleAmount || 0) - systemEligibleAmount) > 0.009 ||
+      line.compareStatus !== compareStatus ||
+      (line.ineligibilityReason || '') !== (ineligibilityReason || '');
+
+    if (!changed) continue;
+
+    await prisma.advanceLoanImportLine.update({
+      where: { id: line.id },
+      data: {
+        eligibleAmount,
+        systemEligibleAmount,
+        compareStatus,
+        ineligibilityReason,
+      },
+    });
+    updated += 1;
+    if (line.employeeCode) changedCodes.push(line.employeeCode);
+  }
+
+  return { importId, updated, lines: changedCodes };
 }
 
 type LoanLinePayload = Parameters<
@@ -917,13 +1113,15 @@ async function evaluateLoanFileRows(params: {
   for (const row of rows.slice(headerIdx + 1)) {
     if (!row) continue;
     const empCode = normalizeLoanEmployeeCode(row[codeCol]);
-    const empName = nameCol >= 0 ? String(row[nameCol] ?? '').trim() : '';
-    if (!empCode && !empName) continue;
+    const empNameRaw = nameCol >= 0 ? row[nameCol] : null;
+    if (!empCode && !cellToText(empNameRaw)) continue;
 
     const requestedAmount = parseFloatCell(row[requestedCol], 0);
     if (requestedAmount <= 0) continue;
 
-    const codeKey = empCode || `name:${empName}`;
+    const employee = empCode ? await resolveEmployeeByCode(empCode) : null;
+    const empName = importedPersonName(empNameRaw, employee?.name);
+    const codeKey = empCode || `name:${empName ?? ''}`;
     if (seenCodes.has(codeKey)) continue;
     seenCodes.add(codeKey);
 
@@ -936,8 +1134,6 @@ async function evaluateLoanFileRows(params: {
     let compareStatus = 'ready';
     let note = '';
     let ineligibilityReason: string | null = null;
-
-    const employee = empCode ? await resolveEmployeeByCode(empCode) : null;
 
     if (isTip) {
       eligibleAmount = requestedAmount;
@@ -966,7 +1162,7 @@ async function evaluateLoanFileRows(params: {
               `أيام العمل الفعلية (${systemEligibility.actualWorkingDays}) أقل من الحد الأدنى (${systemEligibility.minimumWorkingDays})`;
           } else if (systemEligibility.availableAmount <= 0) {
             ineligibilityReason =
-              `لا يوجد مبلغ متاح — الحد ${systemEligibility.maxEligibleAmount} بعد خصم سلف قائمة ${systemEligibility.committedAdvanceTotal}`;
+              `لا يوجد مبلغ متاح — الحد ${systemEligibility.maxEligibleAmount} بعد خصم سلف قصيرة قائمة ${systemEligibility.committedAdvanceTotal}`;
           }
         }
       } catch {
@@ -1013,9 +1209,7 @@ async function evaluateLoanFileRows(params: {
         eligibleAmount = parseFloatCell(row[eligibleCol], requestedAmount);
       }
       if (statusCol >= 0) {
-        const st = String(row[statusCol] ?? '')
-          .trim()
-          .toLowerCase();
+        const st = cellToText(row[statusCol]).toLowerCase();
         const parsed = parseEligibilityStatus(st);
         if (parsed === 'not_eligible') compareStatus = 'not_eligible';
         else if (parsed === 'ready' && eligibleAmount > 0)
@@ -1039,7 +1233,7 @@ async function evaluateLoanFileRows(params: {
 
     let rowReason = params.batch.defaultReason ?? '';
     if (reasonCol >= 0 && row[reasonCol])
-      rowReason = String(row[reasonCol]).trim();
+      rowReason = cellToText(row[reasonCol]);
 
     let repaymentMonths = params.batch.defaultRepaymentMonths;
     if (repaymentCol >= 0) {
@@ -1051,7 +1245,7 @@ async function evaluateLoanFileRows(params: {
       importId: params.batch.id,
       employeeId: employee?.id ?? null,
       employeeCode: empCode || null,
-      employeeName: empName || employee?.name || null,
+      employeeName: employee?.name?.trim() || empName || null,
       requestedAmount,
       eligibleAmount,
       systemEligibleAmount,
@@ -1486,10 +1680,24 @@ export async function updateAdvanceLoanImportLine(
   return advanceLoanImportLineJson(updated);
 }
 
-export async function approveAdvanceLoanImport(importId: string) {
+export async function approveAdvanceLoanImport(
+  importId: string,
+  options: { approveConflicts?: boolean } = {},
+) {
   const batch = await prisma.advanceLoanImport.findUnique({
     where: { id: importId },
-    include: { lines: true },
+    include: {
+      lines: {
+        include: {
+          employee: {
+            select: {
+              hasFawryAccount: true,
+              fawryAccount: true,
+            },
+          },
+        },
+      },
+    },
   });
   if (!batch) throw new NotFoundError('Advance loan import not found');
   if (batch.state === AdvanceLoanImportState.locked) {
@@ -1509,33 +1717,75 @@ export async function approveAdvanceLoanImport(importId: string) {
 
   const deductionStart = firstOfNextMonth(batch.date);
   const eligPeriod = await eligibilityPeriodForBatch(batch);
-  let created = 0;
+  const config = await prisma.bioTimeConfig.findFirst({
+    select: { payrollMonthStartDay: true },
+  });
+  const cycle = payrollMonthRange(
+    batch.date,
+    config?.payrollMonthStartDay ?? 26,
+  );
+  const errors: string[] = [];
+  const invalidLineReasons = new Map<string, string>();
+  const overridableConflictLineIds = new Set<string>();
+  const knownCycleAdvanceIds = new Set<string>();
+  const addInvalidLine = (
+    lineId: string,
+    message: string,
+    addToErrorList = true,
+  ) => {
+    invalidLineReasons.set(lineId, message);
+    if (addToErrorList) errors.push(message);
+  };
+  const prepared: Array<{
+    lineId: string;
+    employeeId: string;
+    employeeCode: string;
+    employeeName: string;
+    approvedAmount: number;
+    reason: string;
+    isFawry: boolean;
+    requiresLimitOverride: boolean;
+    overrideReason: string | null;
+    eligibility: AdvanceEligibilityResult | null;
+  }> = [];
 
+  // Resolve every row first. Approval must never start creating advances before
+  // all selected rows have passed validation.
   for (const line of lines) {
     let employeeId = line.employeeId;
+    let resolvedEmployee: Awaited<ReturnType<typeof resolveEmployeeByCode>> =
+      null;
     if (!employeeId && line.employeeCode) {
-      const emp = await resolveEmployeeByCode(line.employeeCode);
-      employeeId = emp?.id ?? null;
+      resolvedEmployee = await resolveEmployeeByCode(line.employeeCode);
+      employeeId = resolvedEmployee?.id ?? null;
     }
+    const employeeCode =
+      line.employeeCode || resolvedEmployee?.code || employeeId || '';
+    const employeeName =
+      line.employeeName || resolvedEmployee?.name || employeeCode;
     if (!employeeId) {
-      throw new AppError(
-        `السطر «${line.employeeName || line.employeeCode}» غير مرتبط بموظف`,
-        400,
-        'VALIDATION_ERROR',
+      addInvalidLine(
+        line.id,
+        `${employeeName || 'سطر بدون اسم'} (${employeeCode || 'بدون كود'}): غير مرتبط بموظف`,
       );
+      continue;
     }
 
     if (batch.kind === 'tip') {
-      await prisma.advanceLoanImportLine.update({
-        where: { id: line.id },
-        data: {
-          employeeId,
-          compareStatus: 'approved',
-          toApprove: false,
-          note: 'تم اعتماد التيبس',
-        },
+      prepared.push({
+        lineId: line.id,
+        employeeId,
+        employeeCode,
+        employeeName,
+        approvedAmount: line.approvedAmount,
+        reason: line.rowReason || batch.defaultReason || 'تيبس',
+        isFawry: line.employee
+          ? employeeIsFawry(line.employee)
+          : Boolean(resolvedEmployee && employeeIsFawry(resolvedEmployee)),
+        requiresLimitOverride: false,
+        overrideReason: null,
+        eligibility: null,
       });
-      created++;
       continue;
     }
 
@@ -1548,40 +1798,351 @@ export async function approveAdvanceLoanImport(importId: string) {
     const overrideReason = requiresLimitOverride
       ? `اعتماد يدوي من استيراد السلف — استحقاق النظام ${auditEligible}، المعتمد ${line.approvedAmount}`
       : null;
-    const short = await createShortAdvance({
+    prepared.push({
+      lineId: line.id,
       employeeId,
-      amount: line.approvedAmount,
-      date: batch.date,
-      deductionStartDate: deductionStart,
-      notes: reason,
-      sourceGridId: batch.sourceGridId,
-      shiftGridId: eligPeriod.shiftGridId ?? batch.sourceGridId,
-      eligibilityDateFrom: eligPeriod.dateFrom,
-      eligibilityDateTo: eligPeriod.dateTo,
-      limitOverride: requiresLimitOverride,
+      employeeCode,
+      employeeName,
+      approvedAmount: line.approvedAmount,
+      reason,
+      isFawry: line.employee
+        ? employeeIsFawry(line.employee)
+        : Boolean(resolvedEmployee && employeeIsFawry(resolvedEmployee)),
+      requiresLimitOverride,
       overrideReason,
+      eligibility: null,
     });
-
-    await prisma.advanceLoanImportLine.update({
-      where: { id: line.id },
-      data: {
-        employeeId,
-        compareStatus: 'approved',
-        shortAdvanceId: short.id,
-        toApprove: false,
-        note: `تم اعتماد السلفة ${short.id.slice(0, 8)}`,
-      },
-    });
-    created++;
   }
 
-  await prisma.advanceLoanImport.update({
-    where: { id: importId },
-    data: { state: AdvanceLoanImportState.locked },
-  });
-  await freezeLoanImportPaymentSnapshot(importId);
+  if (batch.kind !== 'tip' && prepared.length) {
+    const selectedCountByEmployee = new Map<string, number>();
+    for (const row of prepared) {
+      selectedCountByEmployee.set(
+        row.employeeId,
+        (selectedCountByEmployee.get(row.employeeId) ?? 0) + 1,
+      );
+    }
+    const repeatedInsideSheet = new Set(
+      [...selectedCountByEmployee.entries()]
+        .filter(([, count]) => count > 1)
+        .map(([employeeId]) => employeeId),
+    );
+    for (const employeeId of repeatedInsideSheet) {
+      const repeatedRows = prepared.filter(
+        (item) => item.employeeId === employeeId,
+      );
+      const row = repeatedRows[0];
+      if (!row) continue;
+      const message = `${row.employeeName} (${row.employeeCode}): مكرر داخل نفس كشف الاستيراد`;
+      repeatedRows.forEach((item, index) =>
+        addInvalidLine(item.lineId, message, index === 0),
+      );
+    }
 
-  return { created, import: await getAdvanceLoanImport(importId) };
+    const employeeIds = [...new Set(prepared.map((row) => row.employeeId))];
+    const existingShorts = await prisma.advanceShort.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        state: { in: [AdvanceState.pending, AdvanceState.confirmed] },
+        isDeducted: false,
+        date: { gte: cycle.dateFrom, lte: cycle.dateTo },
+      },
+      select: { id: true, employeeId: true, amount: true },
+    });
+    const sourceLines = existingShorts.length
+      ? await prisma.advanceLoanImportLine.findMany({
+          where: {
+            shortAdvanceId: { in: existingShorts.map((row) => row.id) },
+          },
+          select: {
+            shortAdvanceId: true,
+            importId: true,
+            import: { select: { reference: true } },
+          },
+        })
+      : [];
+    const sourceByShortId = new Map(
+      sourceLines.map((row) => [
+        row.shortAdvanceId,
+        { importId: row.importId, reference: row.import.reference },
+      ]),
+    );
+    const conflictsByEmployee = new Map<
+      string,
+      Array<{ amount: number; source: string }>
+    >();
+    for (const advance of existingShorts) {
+      const source = sourceByShortId.get(advance.id);
+      if (source?.importId === importId) continue;
+      knownCycleAdvanceIds.add(advance.id);
+      const rows = conflictsByEmployee.get(advance.employeeId) ?? [];
+      rows.push({
+        amount: advance.amount,
+        source: source?.reference || 'سلفة يدوية',
+      });
+      conflictsByEmployee.set(advance.employeeId, rows);
+    }
+
+    for (const row of prepared) {
+      if (repeatedInsideSheet.has(row.employeeId)) continue;
+      const conflicts = conflictsByEmployee.get(row.employeeId) ?? [];
+      if (conflicts.length) {
+        const conflictDetails = conflicts
+          .map((item) => `${item.source} (${item.amount})`)
+          .join('، ');
+        addInvalidLine(
+          row.lineId,
+          `${row.employeeName} (${row.employeeCode}): لديه سلفة في نفس الدورة — ${conflictDetails}`,
+        );
+        overridableConflictLineIds.add(row.lineId);
+        if (options.approveConflicts) {
+          row.requiresLimitOverride = true;
+          row.overrideReason = `اعتماد على أي حال من استيراد السلف رغم وجود سلفة في نفس الدورة — ${conflictDetails}`;
+          try {
+            row.eligibility = await assertAdvanceWithinLimit({
+              employeeId: row.employeeId,
+              amount: row.approvedAmount,
+              shiftGridId: eligPeriod.shiftGridId ?? batch.sourceGridId,
+              dateFrom: eligPeriod.dateFrom,
+              dateTo: eligPeriod.dateTo,
+              limitOverride: true,
+              overrideReason: row.overrideReason,
+            });
+          } catch (error) {
+            overridableConflictLineIds.delete(row.lineId);
+            addInvalidLine(
+              row.lineId,
+              `${row.employeeName} (${row.employeeCode}): ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        }
+        continue;
+      }
+      try {
+        row.eligibility = await assertAdvanceWithinLimit({
+          employeeId: row.employeeId,
+          amount: row.approvedAmount,
+          shiftGridId: eligPeriod.shiftGridId ?? batch.sourceGridId,
+          dateFrom: eligPeriod.dateFrom,
+          dateTo: eligPeriod.dateTo,
+          limitOverride: row.requiresLimitOverride,
+          overrideReason: row.overrideReason,
+        });
+      } catch (error) {
+        addInvalidLine(
+          row.lineId,
+          `${row.employeeName} (${row.employeeCode}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
+
+  const hardInvalidLineIds = [...invalidLineReasons.keys()].filter(
+    (lineId) => !overridableConflictLineIds.has(lineId),
+  );
+  if (
+    errors.length &&
+    (!options.approveConflicts || hardInvalidLineIds.length > 0)
+  ) {
+    throw new AppError(
+      `تعذر اعتماد الكشف. لم يتم إنشاء أي سلفة:\n${errors
+        .map((message) => `• ${message}`)
+        .join('\n')}`,
+      400,
+      'LOAN_IMPORT_PREFLIGHT_FAILED',
+    );
+  }
+
+  const approvable = prepared.filter(
+    (row) =>
+      !invalidLineReasons.has(row.lineId) ||
+      overridableConflictLineIds.has(row.lineId),
+  );
+  if (!approvable.length) {
+    throw new AppError(
+      'لا توجد سطور سليمة للاعتماد بعد تخطي الأخطاء',
+      400,
+      'NO_VALID_LOAN_IMPORT_LINES',
+    );
+  }
+
+  const created = await prisma.$transaction(
+    async (tx) => {
+      const current = await tx.advanceLoanImport.findUnique({
+        where: { id: importId },
+        include: { lines: true },
+      });
+      if (!current || current.state !== AdvanceLoanImportState.draft) {
+        throw new AppError(
+          'تغيرت حالة الكشف — حدّث الصفحة وحاول مرة أخرى',
+          409,
+          'IMPORT_STATE_CHANGED',
+        );
+      }
+      const currentSelected = current.lines.filter(
+        (line) =>
+          line.toApprove &&
+          line.approvedAmount > 0 &&
+          !line.shortAdvanceId,
+      );
+      if (
+        currentSelected.length !== lines.length ||
+        currentSelected.some(
+          (line) =>
+            !lines.some(
+              (original) =>
+                original.id === line.id &&
+                Math.abs(original.approvedAmount - line.approvedAmount) <
+                  0.009,
+            ),
+        )
+      ) {
+        throw new AppError(
+          'تغيرت سطور الكشف أثناء الفحص — حدّث الصفحة وحاول مرة أخرى',
+          409,
+          'IMPORT_LINES_CHANGED',
+        );
+      }
+
+      // Recheck same-cycle conflicts inside the serializable transaction to
+      // close the gap between preflight and creation.
+      if (batch.kind !== 'tip') {
+        const conflicting = await tx.advanceShort.findFirst({
+          where: {
+            employeeId: { in: approvable.map((row) => row.employeeId) },
+            ...(options.approveConflicts && knownCycleAdvanceIds.size
+              ? { id: { notIn: [...knownCycleAdvanceIds] } }
+              : {}),
+            state: { in: [AdvanceState.pending, AdvanceState.confirmed] },
+            isDeducted: false,
+            date: { gte: cycle.dateFrom, lte: cycle.dateTo },
+          },
+          select: { id: true },
+        });
+        if (conflicting) {
+          throw new AppError(
+            'ظهرت سلفة أخرى في نفس الدورة أثناء الاعتماد — أعد المحاولة بعد تحديث الصفحة',
+            409,
+            'CONCURRENT_ADVANCE_CONFLICT',
+          );
+        }
+      }
+
+      const preparedByLineId = new Map(
+        approvable.map((row) => [row.lineId, row]),
+      );
+      let cashAmount = 0;
+      let fawryApprovedAmount = 0;
+      let fawryCommissionAmount = 0;
+      for (const line of current.lines) {
+        const selected = preparedByLineId.get(line.id);
+        const isFawry = selected?.isFawry ?? line.isFawry;
+        const countsInTotals =
+          Boolean(selected) || isLoanAccountsExportLine(line);
+        if (!countsInTotals) continue;
+        const amounts = calculateLoanPaymentAmounts(
+          line.approvedAmount,
+          isFawry,
+        );
+        if (isFawry) {
+          fawryApprovedAmount += amounts.approvedAmount;
+          fawryCommissionAmount += amounts.fawryCommission;
+        } else {
+          cashAmount += amounts.totalAmount;
+        }
+      }
+      cashAmount = Math.round(cashAmount * 100) / 100;
+      fawryApprovedAmount =
+        Math.round(fawryApprovedAmount * 100) / 100;
+      fawryCommissionAmount =
+        Math.round(fawryCommissionAmount * 100) / 100;
+      const fawryAmount =
+        Math.round(
+          (fawryApprovedAmount + fawryCommissionAmount) * 100,
+        ) / 100;
+      const totalAmount =
+        Math.round((cashAmount + fawryAmount) * 100) / 100;
+
+      for (const line of current.lines) {
+        const row = preparedByLineId.get(line.id);
+        if (!row) continue;
+        if (batch.kind === 'tip') {
+          await tx.advanceLoanImportLine.update({
+            where: { id: line.id },
+            data: {
+              employeeId: row.employeeId,
+              isFawry: row.isFawry,
+              compareStatus: 'approved',
+              toApprove: false,
+              note: 'تم اعتماد التيبس',
+            },
+          });
+          continue;
+        }
+        if (!row.eligibility) {
+          throw new AppError(
+            `تعذر تثبيت استحقاق ${row.employeeName}`,
+            409,
+            'ELIGIBILITY_CHANGED',
+          );
+        }
+        const short = await tx.advanceShort.create({
+          data: {
+            employeeId: row.employeeId,
+            amount: row.approvedAmount,
+            state: AdvanceState.pending,
+            date: batch.date,
+            deductionStartDate: deductionStart,
+            notes: row.reason,
+            sourceGridId:
+              batch.sourceGridId ??
+              eligPeriod.shiftGridId ??
+              row.eligibility.shiftGridId,
+            ...eligibilityAuditFields(
+              row.eligibility,
+              row.requiresLimitOverride,
+              row.overrideReason,
+            ),
+          },
+        });
+        await tx.advanceLoanImportLine.update({
+          where: { id: line.id },
+          data: {
+            employeeId: row.employeeId,
+            isFawry: row.isFawry,
+            compareStatus: 'approved',
+            shortAdvanceId: short.id,
+            toApprove: false,
+            note: `تم اعتماد السلفة ${short.id.slice(0, 8)}`,
+          },
+        });
+      }
+
+      await tx.advanceLoanImport.update({
+        where: { id: importId },
+        data: {
+          state: AdvanceLoanImportState.locked,
+          cashAmount,
+          fawryAmount,
+          totalAmount,
+        },
+      });
+      return approvable.length;
+    },
+    {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    },
+  );
+
+  return {
+    created,
+    approvedConflicts: overridableConflictLineIds.size,
+    import: await getAdvanceLoanImport(importId),
+  };
 }
 
 export async function exportAdvanceLoanImportReview(
@@ -1692,7 +2253,7 @@ export async function exportEligibilitySheetFromLoanFile(
 
   for (const row of rows.slice(headerIdx + 1)) {
     if (!row) continue;
-    const code = String(row[codeCol] ?? '').trim();
+    const code = normalizeLoanEmployeeCode(row[codeCol]);
     if (!code) continue;
     const requested = parseFloatCell(row[requestedCol], 0);
     if (requested <= 0) continue;
@@ -1700,9 +2261,11 @@ export async function exportEligibilitySheetFromLoanFile(
     if (seen.has(key)) continue;
     seen.add(key);
 
-    let name = nameCol >= 0 ? String(row[nameCol] ?? '').trim() : '';
     const emp = await resolveEmployeeByCode(code);
-    if (!name) name = emp?.name ?? '';
+    let name = importedPersonName(
+      nameCol >= 0 ? row[nameCol] : null,
+      emp?.name,
+    ) ?? '';
     if (emp?.locationId) locationIds.add(emp.locationId);
 
     let eligible = 0;
@@ -1772,6 +2335,7 @@ export async function exportEligibilitySheetFromImport(
           employee: {
             select: {
               jobTitle: true,
+              name: true,
               hiringDate: true,
               workLocation: { select: { name: true, actualName: true } },
             },
@@ -1791,7 +2355,7 @@ export async function exportEligibilitySheetFromImport(
 
   const employees = batch.lines.map((line) => ({
     code: line.employeeCode ?? '',
-    name: line.employeeName ?? '',
+    name: displayLoanEmployeeName(line.employeeName, line.employee?.name),
     jobTitle: line.employee?.jobTitle ?? '',
     hiringDate: line.employee?.hiringDate?.toISOString().slice(0, 10) ?? '',
     requested: line.requestedAmount,

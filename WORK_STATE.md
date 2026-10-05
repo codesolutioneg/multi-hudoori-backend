@@ -12,7 +12,38 @@
 
 ## Daily log
 
+### 2026-10-05
+- **Auto**: Settings menu no longer requires `advanced_permissions` in `MENU_FEATURE_MAP` (HR managers always see إعدادات). **MULTI**.
+- **Auto**: E2E `tests/e2e/planEntitlements.test.ts` (2 green) — public sales → approve Attendance plan → company snapshot (`subscriptionPlanId` / plan names / `company_features`); plan `featureKeys` edit after approve does not mutate snapshot; HR `/me` menus hide payroll; `/payroll/*` → 403 `FEATURE_DISABLED`; attendance allowed; admin override enables payroll + menu; legacy company (no rows) keeps full catalog. Applied entitlements migration on `hudoori_multi_test`. **MULTI**.
+- **Auto**: Plan entitlements — `feature_keys` on plans + `company_features` snapshot on sales approve (`applyPlanSnapshotToCompany`); code catalog `featureCatalog.ts`; admin APIs catalog/plan keys/company toggles; `requireFeatureMiddleware` on `/api/biotime`; menus filtered via `filterMenusByEntitlements`; `/me` returns `entitlements`. Migration `20261005120000_company_plan_entitlements`. Dashboard: plans checklist + company feature toggles. Landing: header Contact sales → `#pricing`; modal caps employees read-only for non-unlimited plans. Smoke: attendance-only snapshot disables payroll flag; demo reverted to legacy (no rows = all features). **MULTI**.
+- **Auto**: Landing sales modal — from plan CTA: plan select locked; employees prefilled from `defaultMaxEmployees` and read-only except Professional (unlimited). Public plans API exposes `defaultMaxEmployees`. Loader logo centered above title. **MULTI**.
+- **Auto**: Landing brand polish — local Cairo `@font-face` (same TTFs as web app), RTL letter-spacing/rotator gradient fix for Arabic shaping, fingerprint mark → official `assets/hudoori-logo.png`; How-it-works stage 1 card uses Hudoori logo (was BioTime SVG). **MULTI**.
+- **Auto**: Price + seat caps — HR 35 / HR+Payroll 45 / Professional 60 (Attendance stays 20); `defaultMaxEmployees` 25 / 50 / 100 / unlimited; feature lines AR/EN + landing redeploy. **MULTI**.
+- **Auto**: Pricing card polish — number-first price (`20` + small `EGP /emp/mo`), equal-height cards with CTA pinned bottom, denser 4-col spacing; fixed API hydration that blew up full price string to 2.6rem. Redeployed `/landing/`. **MULTI**.
+- **Auto**: Replaced public pricing with 4 EGP tiers (Attendance 20 / HR 30 / HR+Payroll 40 / Professional 50); old Start/Business/Enterprise kept DRAFT. Landing HTML + AR/EN strings + deploy `/landing/`. Public `GET /api/public/plans` returns the four published cards only. **MULTI**.
+
+### 2026-10-01
+- **Auto**: Aligned sales registration mail with prod path — `sendRegistrationSuccessEmail` now wraps same `sendUserCredentialsEmail` / `getTransporter` as `/root/hodouri/bio_time_backend` (SMTP host/auth/tls/timeouts identical). Approve UI shows whether email was sent. **MULTI**.
+- **Auto**: SMTP wired on Multi from single-company prod settings (`mail.code-solution.org`); restarted `hudoori-multi-backend`. Resent registration mail for approved `levi` request (password rotated). **MULTI**.
+- **Auto**: Sales update API + approve uses edited `requestedEmployees` as company maxEmployees; registration email includes code/name/phone/quota/plan. Fixed broken `mail.service` merge. **MULTI**.
+- **Auto**: Sanitize demo tenant PII — branches `Demo 1..4`, employees `Demo Employee N`, phones/national IDs/emails/birthdays/doc URLs/bank cleared; hiring + devices + shift grids anonymized. Script `src/scripts/sanitizeDemoCompany.py`. **MULTI**.
+- **Auto**: Landing sales — Prisma `subscription_plans` + `sales_requests` (PUBLISHED/DRAFT, no hard delete); public `GET /api/public/plans`, `POST /api/public/sales-requests` (rate limit); admin approve/reject + plans CRUD. Approve → `createCompany` + HR + `sendRegistrationSuccessEmail` with `companyCode`. Demo company `demo` + `hr@demo.test` / fixed password; seeded 4 branches from biotime_dev (~81 employees). CORS: `http://164.68.110.233:8090`. e2e `salesRequests` green; esbuild refresh of route/service `dist`, PM2 restart `hudoori-multi-backend`. **MULTI**.
+
+### 2026-09-30
+- **Auto**: SaaS seats per company — `companies.max_employees` / `max_users` (null = unlimited). Hard lock = Postgres BEFORE INSERT triggers + advisory lock per company (migration `20260930120000_company_seat_quotas`); archived employees still count; EMPLOYEE / PLATFORM_ADMIN logins take no user seat. `licenseQuota.service` + Prisma extension pre-check → `EMPLOYEE_QUOTA_EXCEEDED` / `USER_QUOTA_EXCEEDED` (Arabic message). Super Admin create requires both caps, `/companies/update` edits them, list/get return `quota`; HR read-only `POST /api/biotime/company/quota`. Excel + shift-grid imports fail fast before any write; BioTime/Odoo employee sync skips new employees once full and keeps updating the rest. Tests: unit `licenseQuota` (4) + e2e `companyQuota` (7) + `tenantIsolation` green; other e2e failures identical to HEAD (pre-existing). Rebuilt `dist`, restarted `hudoori-multi-backend` (health 200). Live check on acme (set 1/1 → rejects HR + employee logins) then reset to unlimited. **MULTI**.
+
+### 2026-09-29
+- **Auto**: Seeded `beta` from biotime_dev — branches Strip, Leven, Bri.Str, Sizzler (80 employees, 1500 punches/attendance, 4 grids, 40 advances/deductions, catalogs). New `src/scripts/seedCompanyFromDevBranches.py` re-keys all ids with `_<company>` suffix so the same dev rows can go to several companies; cross-tenant FK scan = 0; mandara unchanged. **MULTI**.
+- **Auto**: `--full` run for beta (same 4 branches): all 523 employees + 443 BioTime mappings, 45 shift grids with merge links (5 monthly), 40,486 grid lines, 997 manual OT lines, 46,453 punches (2026-07-16 → 09-29), 51,393 attendance rows. Large inserts via psql stdin. Cross-tenant FK = 0; mandara unchanged. **MULTI**.
+
+### 2026-09-28
+- **Auto**: Punch-report sync falls back to local DB punches when BioTime is unconfigured/unreachable (empty `serverIp` caused Invalid URL); job soft-completes instead of failing. **MULTI**.
+- **Auto**: Ported single-company prod logic (Sept) into Multi: punch 31→30 adj, loan import/eligibility + approveConflicts, deductions delete-bulk, shift-grid monthly reports (service+routes+tests), payroll/odoo/excel/grouping/Fawry updates; kept `getCompanyId` audit filter. Unit: punch 66 + grouping 11 + monthly reports 3 green. Rebuilt `dist`, restarted `hudoori-multi-backend` (`hr-api` health 200). **MULTI**.
+- **Auto**: Seeded mandara from biotime_dev sample — branches Bri.Mad + Sizzler, catalogs, ~80 employees, grids/punches/advances/deductions (schema-aware `company_id`). Script `src/scripts/seedMandaraFromDevBranches.py`. **MULTI**.
+
 ### 2026-09-15
+- **Auto**: Restored Multi API — built `dist`, PM2 `hudoori-multi-backend` on `:3003` (nginx `hr-api` → 200 `/api/health`). Ecosystem `deploy/pm2.multi.config.cjs`; `pm2 save`. Fixes «تعذر الاتصال بالخادم» on hr.hudoori companies page. **MULTI**.
+- **Auto**: Ported single-company prod loan-import name fixes (`cellToText` rejects `[object Object]`, prefer profile name over Excel redaction `••••`), loan sheet name `سلف` + job-ladder sort on template. Unit tips tests green. **MULTI**.
 - **Auto**: Ported single-company prod punch/loan fixes from `/root/hodouri`: loan-import `eligibilityPeriodForBatch` no longer pre-caps `dateTo`; `isPayrollLengthSpan` so weekly reports stay ~7 days not fixed-30; day-shift past-midnight checkout attribution (`isWithinDayShiftPastMidnightCheckoutWindow`); unit tests updated. **MULTI**.
 
 ### 2026-09-13

@@ -2,6 +2,8 @@ import ExcelJS from 'exceljs';
 import { ShiftGridState, type EmployeeMapping, type EmployeeProfile, type Shift, type ShiftGridLine } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError, NotFoundError } from '../utils/errors';
+import { requireCompanyId } from '../tenant/context';
+import { EMPLOYEE_QUOTA_EXCEEDED, remainingEmployeeSeats } from './licenseQuota.service';
 import { buildWeekGroups, parseWeekStartDay } from './shiftGridExcelWeeks';
 import {
   compareForGrouping,
@@ -47,9 +49,25 @@ const INFO_ROW = 2;
 const WEEK_ROW = 3;
 const HEADER_ROW = 4;
 const DATA_START_ROW = 5;
-const FIXED_COLS = 4;
+const FIXED_COLS = 5;
 const TEMPLATE_ROW_COUNT = 20;
-const CODE_COL = 4;
+/** Employee code column in the current export layout (after hiring date). */
+const CODE_COL = 5;
+const HIRING_COL = 4;
+const NAME_COL = 3;
+const JOB_COL = 2;
+
+const FIXED_HEADER_LABELS = new Set([
+  'الرقم',
+  'الوظيفة',
+  'الاسم',
+  'تاريخ التعيين',
+  'كود الموظف',
+  'الكود',
+  'كود',
+  'code',
+  'name',
+]);
 
 const COLORS = {
   titleBg: 'FF1A237E',
@@ -541,10 +559,56 @@ function parseHeaderDate(headerVal: unknown, defaultYear: number): string | null
   return null;
 }
 
+function formatHiringDate(emp: EmpWithRelations): string {
+  if (!emp.hiringDate) return '';
+  const d = emp.hiringDate instanceof Date ? emp.hiringDate : new Date(emp.hiringDate);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
+}
+
+/** Resolve code/name/job columns — supports legacy 4-col and new 5-col (hiring date) layouts. */
+function resolveImportLayout(sheet: ExcelJS.Worksheet, headerRowNum: number): {
+  codeCol: number;
+  nameCol: number;
+  jobCol: number;
+  fixedCols: number;
+} {
+  let codeCol = 0;
+  let nameCol = NAME_COL;
+  let jobCol = JOB_COL;
+  let maxFixed = 4;
+  sheet.getRow(headerRowNum).eachCell({ includeEmpty: false }, (cell, col) => {
+    const v = cellText(cell.value).toLowerCase();
+    const raw = cellText(cell.value);
+    if (
+      raw === 'كود الموظف' ||
+      raw === 'الكود' ||
+      raw === 'كود' ||
+      v === 'code' ||
+      v === 'employee code'
+    ) {
+      codeCol = col;
+      maxFixed = Math.max(maxFixed, col);
+    }
+    if (raw === 'الاسم' || v === 'name') nameCol = col;
+    if (raw === 'الوظيفة' || v === 'job' || v === 'job title') jobCol = col;
+    if (raw === 'تاريخ التعيين' || v === 'hiring date') maxFixed = Math.max(maxFixed, col);
+    if (FIXED_HEADER_LABELS.has(raw) || FIXED_HEADER_LABELS.has(v)) {
+      maxFixed = Math.max(maxFixed, col);
+    }
+  });
+  return {
+    codeCol: codeCol || CODE_COL,
+    nameCol,
+    jobCol,
+    fixedCols: Math.max(maxFixed, codeCol || CODE_COL),
+  };
+}
+
 function findHeaderRow(sheet: ExcelJS.Worksheet): number {
   for (let r = 1; r <= Math.min(8, sheet.rowCount); r++) {
     const row = sheet.getRow(r);
-    for (let c = 1; c <= Math.min(6, sheet.columnCount); c++) {
+    for (let c = 1; c <= Math.min(8, sheet.columnCount); c++) {
       const v = cellText(row.getCell(c).value);
       if (v === 'الكود' || v === 'كود الموظف' || v === 'الاسم' || v.toLowerCase() === 'code') return r;
     }
@@ -564,12 +628,12 @@ function looksLikeEmployeeCode(value: string): boolean {
   return normalized.length <= 16;
 }
 
-function isJobGroupRow(sheet: ExcelJS.Worksheet, rowNum: number): boolean {
+function isJobGroupRow(sheet: ExcelJS.Worksheet, rowNum: number, codeCol = CODE_COL): boolean {
   const row = sheet.getRow(rowNum);
   const seq = cellText(row.getCell(1).value);
-  const job = cellText(row.getCell(2).value);
-  const name = cellText(row.getCell(3).value);
-  const code = normalizeEmployeeCode(row.getCell(CODE_COL).value);
+  const job = cellText(row.getCell(JOB_COL).value);
+  const name = cellText(row.getCell(NAME_COL).value);
+  const code = normalizeEmployeeCode(row.getCell(codeCol).value);
   const seqIsNumber = /^\d+$/.test(seq);
 
   // Merged section header row: same label repeated in job / name / code columns
@@ -765,12 +829,13 @@ export async function exportShiftGridXlsx(
   const sheet = workbook.addWorksheet(sheetName, {
     properties: { defaultRowHeight: 26 },
   });
-  sheet.views = [{ rightToLeft: true, state: 'frozen', ySplit: DATA_START_ROW - 1, xSplit: FIXED_COLS, activeCell: 'E5' }];
+  sheet.views = [{ rightToLeft: true, state: 'frozen', ySplit: DATA_START_ROW - 1, xSplit: FIXED_COLS, activeCell: 'F5' }];
 
   sheet.getColumn(1).width = 5;
   sheet.getColumn(2).width = 14;
   sheet.getColumn(3).width = 24;
   sheet.getColumn(4).width = 12;
+  sheet.getColumn(5).width = 12;
   for (let c = FIXED_COLS + 1; c <= totalCols; c++) {
     sheet.getColumn(c).width = 16;
   }
@@ -796,7 +861,7 @@ export async function exportShiftGridXlsx(
     col += w.colspan;
   }
 
-  const fixedHeaders = ['الرقم', 'الوظيفة', 'الاسم', 'كود الموظف'];
+  const fixedHeaders = ['الرقم', 'الوظيفة', 'الاسم', 'تاريخ التعيين', 'كود الموظف'];
   for (let i = 0; i < fixedHeaders.length; i++) {
     const c = sheet.getCell(HEADER_ROW, i + 1);
     c.value = fixedHeaders[i];
@@ -833,9 +898,12 @@ export async function exportShiftGridXlsx(
       applyStyle(sheet.getCell(row, 3), nameFmt);
       sheet.getCell(row, 3).value = emp.name;
       sheet.getCell(row, 3).protection = { locked: true };
-      applyStyle(sheet.getCell(row, 4), cellFmt);
-      sheet.getCell(row, 4).value = employeeDisplayCode(emp);
-      sheet.getCell(row, 4).protection = { locked: true };
+      applyStyle(sheet.getCell(row, HIRING_COL), cellFmt);
+      sheet.getCell(row, HIRING_COL).value = formatHiringDate(emp);
+      sheet.getCell(row, HIRING_COL).protection = { locked: true };
+      applyStyle(sheet.getCell(row, CODE_COL), cellFmt);
+      sheet.getCell(row, CODE_COL).value = employeeDisplayCode(emp);
+      sheet.getCell(row, CODE_COL).protection = { locked: true };
 
       let rowSkipValidation = false;
       for (let i = 0; i < dates.length; i++) {
@@ -1211,6 +1279,22 @@ export async function importShiftGridXlsx(
       .filter(Boolean),
   );
 
+  if (createCodeSet.size > 0) {
+    let toCreate = 0;
+    for (const code of createCodeSet) {
+      if (!(await findEmployeeByCode(code))) toCreate++;
+    }
+    const left = await remainingEmployeeSeats(requireCompanyId());
+    if (left != null && toCreate > left) {
+      throw new AppError(
+        `الاستيراد يضيف ${toCreate} موظف جديد والمتبقي في اشتراك الشركة ${left} فقط. `
+          + 'لم يتم الاستيراد — قلّل الموظفين الجدد أو راجع مدير المنصة.',
+        400,
+        EMPLOYEE_QUOTA_EXCEEDED,
+      );
+    }
+  }
+
   const range = resolveGridExcelDateRange(
     grid.dateFrom,
     grid.dateTo,
@@ -1251,10 +1335,13 @@ export async function importShiftGridXlsx(
   const headerRowNum = findHeaderRow(sheet);
   const dataStartRow = headerRowNum + 1;
   const defaultYear = grid.dateFrom.getFullYear();
+  const layout = resolveImportLayout(sheet, headerRowNum);
 
   const allDateCols: { col: number; date: string }[] = [];
   sheet.getRow(headerRowNum).eachCell((cell, col) => {
-    if (col <= FIXED_COLS) return;
+    const header = cellText(cell.value);
+    if (FIXED_HEADER_LABELS.has(header) || FIXED_HEADER_LABELS.has(header.toLowerCase())) return;
+    if (col <= layout.fixedCols && !parseHeaderDate(cell.value, defaultYear)) return;
     const parsed = parseHeaderDate(cell.value, defaultYear);
     if (parsed) allDateCols.push({ col, date: parsed });
   });
@@ -1297,14 +1384,14 @@ export async function importShiftGridXlsx(
   const locationName = grid.location?.name ?? grid.gridLocation ?? null;
 
   for (let rowNum = dataStartRow; rowNum <= sheet.rowCount; rowNum++) {
-    if (isJobGroupRow(sheet, rowNum)) continue;
+    if (isJobGroupRow(sheet, rowNum, layout.codeCol)) continue;
 
     const row = sheet.getRow(rowNum);
-    const code = normalizeEmployeeCode(row.getCell(CODE_COL).value);
+    const code = normalizeEmployeeCode(row.getCell(layout.codeCol).value);
     if (!code) continue;
 
-    const excelName = cellText(row.getCell(3).value);
-    const excelJob = cellText(row.getCell(2).value);
+    const excelName = cellText(row.getCell(layout.nameCol).value);
+    const excelJob = cellText(row.getCell(layout.jobCol).value);
 
     let employee = await findEmployeeByCode(code);
     if (!employee) {

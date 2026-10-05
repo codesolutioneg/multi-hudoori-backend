@@ -26,6 +26,7 @@ import {
   exportPeriodCashFawryZip,
   exportPeriodPayrollSummaryXlsx,
   exportZipFileResponse,
+  searchPeriodPayrollEmployees,
 } from '../../services/payrollPeriodExports.service';
 import { fixBasicSalarySingle } from '../../services/payrollLine.service';
 import { prisma } from '../../prisma/client';
@@ -118,6 +119,17 @@ router.post('/payroll/period/negative-net/export-xlsx', requireAuth, requireHr, 
     dateTo: params.dateTo != null ? String(params.dateTo) : null,
   });
   jsonRpcSuccess(res, biotimeOk(exportFileResponse(base64, filename)), req.rpcId);
+}));
+
+router.post('/payroll/period/employees/search', requireAuth, requireHr, asyncHandler(async (req, res) => {
+  const params = p(req);
+  const result = await searchPeriodPayrollEmployees({
+    dateFrom: params.dateFrom != null ? String(params.dateFrom) : null,
+    dateTo: params.dateTo != null ? String(params.dateTo) : null,
+    search: params.search != null ? String(params.search) : null,
+    limit: params.limit != null ? Number(params.limit) : undefined,
+  });
+  jsonRpcSuccess(res, biotimeOk(result), req.rpcId);
 }));
 
 router.post('/payroll/period/cash-fawry/export-zip', requireAuth, requireHr, asyncHandler(async (req, res) => {

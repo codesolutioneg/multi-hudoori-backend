@@ -1,4 +1,5 @@
 import { User, UserRole } from '@prisma/client';
+import { MENU_FEATURE_MAP } from './featureCatalog';
 
 export interface BioTimeRoles {
   isEmployee: boolean;
@@ -36,6 +37,18 @@ export function getUserRoles(user: User, hasEmployee: boolean): BioTimeRoles {
   };
 }
 
+export function filterMenusByEntitlements(
+  menus: Array<{ id: string; name: string; icon: string; route: string }>,
+  enabledFeatures: Set<string> | null,
+): Array<{ id: string; name: string; icon: string; route: string }> {
+  if (!enabledFeatures) return menus;
+  return menus.filter((m) => {
+    const feat = MENU_FEATURE_MAP[m.id];
+    if (!feat) return true;
+    return enabledFeatures.has(feat);
+  });
+}
+
 export function getMenusForUser(
   roles: BioTimeRoles,
   _options?: {
@@ -47,6 +60,8 @@ export function getMenusForUser(
     runsABranch?: boolean;
     /** Branch has GPS punch enabled — show attendance punch screen. */
     mobileLocationPunch?: boolean;
+    /** Company plan entitlements; null/undefined = no filter (platform admin). */
+    enabledFeatures?: Set<string> | null;
   },
 ): Array<{
   id: string;
@@ -129,5 +144,8 @@ export function getMenusForUser(
     menus.push({ id: 'dashboard', name: 'الرئيسية', icon: 'dashboard', route: '/dashboard' });
   }
 
+  if (_options?.enabledFeatures) {
+    return filterMenusByEntitlements(menus, _options.enabledFeatures);
+  }
   return menus;
 }

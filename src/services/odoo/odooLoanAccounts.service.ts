@@ -348,16 +348,47 @@ const loanAccountsExportLineWhere = (importId: string) => ({
   ],
 });
 
+export function resolveLoanImportBranchName(batch: {
+  device?: {
+    name?: string | null;
+    location?: { name?: string | null; actualName?: string | null } | null;
+  } | null;
+  sourceGrid?: {
+    name?: string | null;
+    location?: { name?: string | null; actualName?: string | null } | null;
+  } | null;
+}): string {
+  return (
+    batch.sourceGrid?.location?.actualName?.trim() ||
+    batch.sourceGrid?.location?.name?.trim() ||
+    batch.device?.location?.actualName?.trim() ||
+    batch.device?.location?.name?.trim() ||
+    batch.device?.name?.trim() ||
+    batch.sourceGrid?.name?.trim() ||
+    ''
+  );
+}
+
+export function resolveLoanImportFilenameLocationToken(
+  batch: Parameters<typeof resolveLoanImportBranchName>[0],
+  employeeLocationNames: Iterable<string>,
+): string {
+  const branchName = resolveLoanImportBranchName(batch);
+  return branchName
+    ? safeFilenameToken(branchName)
+    : primaryLocationFilenameToken(employeeLocationNames);
+}
+
 async function loadLoanAccountsExportLines(importId: string): Promise<{
   lines: LoanAccountsExportLine[];
   filenameStem: string;
-  firstActualName: string;
+  batchBranchName: string;
 }> {
   const batch = await prisma.advanceLoanImport.findUnique({
     where: { id: importId },
     include: {
-      device: true,
-      sourceGrid: true,
+      device: { include: { location: true } },
+      sourceGrid: { include: { location: true } },
       lines: {
         where: loanAccountsExportLineWhere(importId),
         include: {
@@ -395,13 +426,16 @@ async function loadLoanAccountsExportLines(importId: string): Promise<{
     const location = line.employee?.workLocation;
     return location?.actualName?.trim() || location?.name?.trim() || '';
   });
-  const locationToken = accountsExportLocationToken(locationLabels);
-  const firstActualName = locationLabels.find(Boolean) ?? '';
+  const batchBranchName = resolveLoanImportBranchName(batch);
+  const locationToken = resolveLoanImportFilenameLocationToken(
+    batch,
+    locationLabels,
+  );
   const sourceToken = safeFilenameToken(
     batch.sourceGrid?.name || batch.reference || 'review',
   );
   const stem = `${locationToken}_${sourceToken}`;
-  return { lines, filenameStem: stem, firstActualName };
+  return { lines, filenameStem: stem, batchBranchName };
 }
 
 /** Odoo DLW `_build_accounts_export_workbook` parity (فوري + كاش sheets). */
@@ -548,6 +582,7 @@ export async function exportLoanAccountsSheetsForPeriod(
   const batches = await prisma.advanceLoanImport.findMany({
     where: {
       state: 'locked',
+      kind: 'loan',
       date: { gte: dateFrom, lte: dateTo },
       lines: { some: {} },
     },
@@ -657,13 +692,16 @@ export async function sendLoanImportToOdooAccounts(importId: string): Promise<{
     );
   }
 
-  const { lines, filenameStem, firstActualName } =
+  const { lines, filenameStem, batchBranchName } =
     await loadLoanAccountsExportLines(importId);
   const exportWorkbook = await buildOdooLoanAccountsExportWorkbook(lines, {
     filenameStem,
   });
-  const { cashAmount: cash, fawryAmount: fawry } = exportWorkbook;
-  if (cash <= 0 && fawry <= 0) {
+  // Odoo journal posts the loan principal only — Fawry commission stays in the
+  // Excel attachment columns, not in cash_amount / fawry_amount.
+  const cashApproved = exportWorkbook.cashApprovedAmount;
+  const fawryApproved = exportWorkbook.fawryApprovedAmount;
+  if (cashApproved <= 0 && fawryApproved <= 0) {
     throw new AppError(
       'لا توجد مبالغ معتمدة للإرسال إلى الحسابات',
       400,
@@ -673,11 +711,11 @@ export async function sendLoanImportToOdooAccounts(importId: string): Promise<{
 
   const session = await authenticateOdooOrm();
   const vals: Record<string, unknown> = {
-    cash_amount: cash,
-    fawry_amount: fawry,
+    cash_amount: cashApproved,
+    fawry_amount: fawryApproved,
     wizard_snapshot: formatOdooReviewReference(
       batch.reference,
-      firstActualName,
+      batchBranchName,
     ),
     accounts_export_file: exportWorkbook.base64,
     accounts_export_filename: exportWorkbook.filename,
@@ -739,8 +777,8 @@ export async function sendLoanImportToOdooAccounts(importId: string): Promise<{
       accountsSendId,
       moveId,
       name,
-      cashAmount: cash,
-      fawryAmount: fawry,
+      cashAmount: cashApproved,
+      fawryAmount: fawryApproved,
     };
   } catch (err) {
     // Record was created; still persist the send id so we don't duplicate.
@@ -795,8 +833,8 @@ export async function uploadLoanReviewExcelToOdoo(params: {
     'create',
     [
       {
-        cash_amount: summary.cashAmount,
-        fawry_amount: summary.fawryAmount,
+        cash_amount: summary.cashApprovedAmount,
+        fawry_amount: summary.fawryApprovedAmount,
         wizard_snapshot: `Hudoori Excel upload — ${filename}`,
         accounts_export_file: params.fileBase64.replace(
           /^data:[^;]+;base64,/,

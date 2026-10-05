@@ -15,6 +15,8 @@ import { getMySchedule } from '../../services/employeeSchedule.service';
 import { AppError } from '../../utils/errors';
 import { getDashboardNotifications, markDashboardNotificationsRead, } from '../../services/dashboardNotifications.service';
 import { getUserRoles, getMenusForUser } from '../../services/roles.service';
+import { getEnabledFeatureSet } from '../../services/companyEntitlements.service';
+import { allFeatureKeys } from '../../services/featureCatalog';
 import { locationsManagedBy } from '../../services/branchManager.service';
 import { userHasAuditGrant, userHasAssistantGrant, userHasEmployeeDeleteGrant } from '../../services/auditLog.service';
 import { listAbsenceAlerts, markAbsenceAlertsRead, } from '../../services/absenceAlerts.service';
@@ -55,7 +57,10 @@ router.post('/me', requireAuth, asyncHandler(async (req, res) => {
         },
         false,
       );
-      const menus = getMenusForUser(roles, { auditLog: true });
+      const enabledFeatures = req.user.activeCompanyId
+        ? await getEnabledFeatureSet(req.user.activeCompanyId)
+        : new Set(allFeatureKeys());
+      const menus = getMenusForUser(roles, { auditLog: true, enabledFeatures });
       // Platform admin without a selected company: no per-company BioTime config.
       const config = req.user.activeCompanyId
         ? await getConfig()
@@ -120,11 +125,20 @@ router.post('/me', requireAuth, asyncHandler(async (req, res) => {
       mobileLocationPunch = false;
     }
   }
+  const companyIdForEnt = user.companyId ?? req.user?.activeCompanyId ?? null;
+  const enabledFeatures =
+    roles.isPlatformAdmin && !companyIdForEnt
+      ? null
+      : await getEnabledFeatureSet(companyIdForEnt);
   const menus = getMenusForUser(roles, {
     auditLog,
     runsABranch: managedLocations.length > 0,
     mobileLocationPunch,
+    enabledFeatures,
   });
+  const entitlements = enabledFeatures
+    ? Object.fromEntries([...enabledFeatures].map((k) => [k, true]))
+    : Object.fromEntries(allFeatureKeys().map((k) => [k, true]));
   let config: Awaited<ReturnType<typeof getConfig>> | Record<string, unknown>;
   try {
     config = await getConfig();
@@ -170,7 +184,7 @@ router.post('/me', requireAuth, asyncHandler(async (req, res) => {
     } : {},
     roles,
     menus,
-    features: { auditLog, helpAssistant, employeeDelete, mobileLocationPunch },
+    features: { auditLog, helpAssistant, employeeDelete, mobileLocationPunch, entitlements },
         config: configSummaryJson(config as never),
         apiVersion: '1.0.0-node-multi',
         companyId: user.companyId ?? null,

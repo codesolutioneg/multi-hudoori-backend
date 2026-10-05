@@ -107,15 +107,13 @@ export async function syncOdooHrEmployeesForPayroll(
       'hr.employee',
       'write',
       [
-        [
-          hrId,
-          {
-            insurance_salary: emp.insuranceSalary || line.socialInsurance || 0,
-            medical_insurance_salary:
-              emp.medicalInsuranceSalary || line.medicalInsurance || 0,
-            fawry_account: Boolean(emp.hasFawryAccount),
-          },
-        ],
+        [hrId],
+        {
+          insurance_salary: emp.insuranceSalary || line.socialInsurance || 0,
+          medical_insurance_salary:
+            emp.medicalInsuranceSalary || line.medicalInsurance || 0,
+          fawry_account: Boolean(emp.hasFawryAccount),
+        },
       ],
       KW_CTX,
       session,
@@ -194,15 +192,13 @@ export async function replaceOdooJournalAttachmentsWithHudooriExports(
     'biotime.payroll.journal',
     'write',
     [
-      [
-        odooJournalId,
-        {
-          payroll_xlsx_attachment_id: payrollAttId,
-          fawry_xlsx_attachment_id: fawryAttId,
-          cash_fawry_xlsx_attachment_id: cashFawryAttId,
-          attachment_ids: [[6, 0, newIds]],
-        },
-      ],
+      [odooJournalId],
+      {
+        payroll_xlsx_attachment_id: payrollAttId,
+        fawry_xlsx_attachment_id: fawryAttId,
+        cash_fawry_xlsx_attachment_id: cashFawryAttId,
+        attachment_ids: [[6, 0, newIds]],
+      },
     ],
     KW_CTX,
     session,

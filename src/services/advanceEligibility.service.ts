@@ -233,9 +233,9 @@ export async function getOutstandingAdvanceTotals(
     }
   }
 
-  const committedAdvanceTotal = round2(
-    pendingShortTotal + runningLongRemaining + draftLongTotal + pendingRequestTotal,
-  );
+  // Short-advance eligibility ignores long advances (running/draft). Only other
+  // pending shorts + pending short requests reduce the available short limit.
+  const committedAdvanceTotal = round2(pendingShortTotal + pendingRequestTotal);
   return {
     pendingShortTotal,
     runningLongRemaining,

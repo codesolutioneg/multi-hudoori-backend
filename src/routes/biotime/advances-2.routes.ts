@@ -173,6 +173,27 @@ router.post(
 );
 
 router.post(
+  "/advances/loan-import/lines/delete",
+  requireAuth,
+  requireHr,
+  asyncHandler(async (req, res) => {
+    const lineId = String(p(req).lineId ?? p(req).id ?? "");
+    const result =
+      await advanceLoanImportService.deleteAdvanceLoanImportLine(lineId);
+    await writeAudit({
+      req,
+      module: "advances",
+      action: "advances.loan_import.delete_line",
+      entityType: "AdvanceLoanImportLine",
+      entityId: lineId,
+      summary: `حذف سطر من مسودة استيراد سلف: ${lineId}`,
+      route: "/advances/loan-import/lines/delete",
+    });
+    jsonRpcSuccess(res, biotimeOk(result), req.rpcId);
+  }),
+);
+
+router.post(
   "/advances/loan-import/lines/add-manual",
   requireAuth,
   requireHr,
@@ -200,8 +221,11 @@ router.post(
   requireHr,
   asyncHandler(async (req, res) => {
     const importId = String(p(req).importId ?? p(req).id ?? "");
+    const approveConflicts = p(req).approveConflicts === true;
     const result =
-      await advanceLoanImportService.approveAdvanceLoanImport(importId);
+      await advanceLoanImportService.approveAdvanceLoanImport(importId, {
+        approveConflicts,
+      });
     await writeAudit({
       req,
       module: "advances",
@@ -209,7 +233,10 @@ router.post(
       entityType: "AdvanceLoanImport",
       entityId: importId,
       summary: `اعتماد استيراد سلف: ${importId}`,
-      counts: { created: result.created },
+      counts: {
+        created: result.created,
+        approvedConflicts: result.approvedConflicts,
+      },
       route: "/advances/loan-import/approve",
     });
     jsonRpcSuccess(res, biotimeOk(result), req.rpcId);

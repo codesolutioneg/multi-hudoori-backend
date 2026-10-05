@@ -10,6 +10,7 @@ import { logger } from '../../utils/logger';
 import { BioTimeConnector, BioTimeEmployee, BioTimeTransaction } from './biotimeConnector.service';
 import { pushPendingEmployeesToBioTime, EmployeePushResult } from './employeePush.service';
 import { applyDuplicateMarking, remarkDuplicatesInRange } from './transactionDuplicate.service';
+import { isQuotaError } from '../licenseQuota.service';
 
 const JOB_STALE_MS = 2 * 60 * 60 * 1000; // 2 hours
 const TRANSACTION_RANGE_JOB = 'transaction_range';
@@ -201,6 +202,9 @@ export async function syncEmployees(): Promise<number> {
   const connector = await BioTimeConnector.fromDb();
   let page = 1;
   let count = 0;
+  // Seats full: stop creating locals but keep updating existing ones (punch sync must keep running).
+  let quotaReached = false;
+  let skippedForQuota = 0;
 
   while (page <= 100) {
     const response = await connector.getEmployees(page, 200);
@@ -223,31 +227,42 @@ export async function syncEmployees(): Promise<number> {
       });
 
       if (!employee) {
-        employee = await prisma.employeeProfile.create({
-          data: {
-            name,
-            displayName,
-            code: empCode,
-            barcode: empCode,
-            departmentId: deptId,
-            biotimeSynced: true,
-            mapping: {
-              create: {
-                biotimeEmpId: row.id,
-                biotimeEmpCode: empCode,
-                firstName: row.first_name,
-                lastName: row.last_name,
-                cardNo: row.card_no,
-                mobile: row.mobile,
-                email: row.email,
-                gender: row.gender,
-                biotimeDepartmentId: bioDeptId,
-                lastSync: new Date(),
+        if (quotaReached) {
+          skippedForQuota++;
+          continue;
+        }
+        try {
+          employee = await prisma.employeeProfile.create({
+            data: {
+              name,
+              displayName,
+              code: empCode,
+              barcode: empCode,
+              departmentId: deptId,
+              biotimeSynced: true,
+              mapping: {
+                create: {
+                  biotimeEmpId: row.id,
+                  biotimeEmpCode: empCode,
+                  firstName: row.first_name,
+                  lastName: row.last_name,
+                  cardNo: row.card_no,
+                  mobile: row.mobile,
+                  email: row.email,
+                  gender: row.gender,
+                  biotimeDepartmentId: bioDeptId,
+                  lastSync: new Date(),
+                },
               },
             },
-          },
-          include: { mapping: true },
-        });
+            include: { mapping: true },
+          });
+        } catch (err) {
+          if (!isQuotaError(err)) throw err;
+          quotaReached = true;
+          skippedForQuota++;
+          continue;
+        }
       } else if (employee.biotimeSynced) {
         await prisma.employeeProfile.update({
           where: { id: employee.id },
@@ -324,6 +339,13 @@ export async function syncEmployees(): Promise<number> {
       where: { id: config.id },
       data: { lastEmployeeSync: new Date() },
     });
+  }
+
+  if (skippedForQuota > 0) {
+    logger.warn(
+      { skippedForQuota, companyId: requireCompanyId() },
+      'BioTime employee sync: new employees skipped — company employee quota reached',
+    );
   }
 
   await linkAppUsersToEmployees();

@@ -537,29 +537,34 @@ function calendarSpanFromLines(lines: PunchReportExportLine[]): number {
   return calendarPeriodDays(dates[0]!, dates[dates.length - 1]!);
 }
 
-/** Fixed 30-day month with 31 calendar rows (26→25) → deduct one actual day. */
+/** Fixed 30-day month with 31 calendar rows (26→25) → deduct one working day. */
 function actualDaysCalendarAdjustment(lines: PunchReportExportLine[], payable: number): number {
   if (!lines.length || payable <= 0) return 0;
   const span = calendarSpanFromLines(lines);
+  // Only the extra day of a full payroll window (31 rows vs 30). Gapped
+  // ranges (e.g. June work + July leave) must not lose a working day.
+  if (lines.length < payable) return 0;
   return Math.max(lines.length, span) > payable ? 1 : 0;
 }
 
 /**
  * Work days are the payable month minus the days that earn nothing.
  * «أيام العمل الفعلية» = عدد أيام العمل + الإجازة المستحقة (مثلاً 24 + 4 = 28).
- * When the calendar spans 31 days but payable month is 30, deduct one day.
+ * When the calendar spans 31 days but payable month is 30, deduct that extra
+ * day from عدد أيام العمل first, then accrue leave from the reduced base
+ * (so 24 work days → 23 work + 3 leave = 26 actual).
  */
 export function computeSummaryWorkMetrics(
   lines: PunchReportExportLine[],
   periodDays: number,
 ): { workingDays: number; earnedLeaveCapped: number; actualWorkingDays: number } {
   const payable = Math.max(0, periodDays);
-  const workingDays = countWorkingDays(lines, payable);
-  const earnedLeaveCapped = Math.min(earnedLeaveFromBaseDays(workingDays), 4);
   const calendarAdj = actualDaysCalendarAdjustment(lines, payable);
+  const workingDays = Math.max(0, countWorkingDays(lines, payable) - calendarAdj);
+  const earnedLeaveCapped = Math.min(earnedLeaveFromBaseDays(workingDays), 4);
   const actualWorkingDays =
     lines.length > 0
-      ? Math.max(0, Math.min(payable, workingDays + earnedLeaveCapped - calendarAdj))
+      ? Math.max(0, Math.min(payable, workingDays + earnedLeaveCapped))
       : 0;
   return { workingDays, earnedLeaveCapped, actualWorkingDays };
 }

@@ -246,6 +246,7 @@ function buildEmployeeRow(
     employee_id: emp.id,
     name: emp.name,
     code: employeeDisplayCode(emp),
+    hiring_date: emp.hiringDate ? emp.hiringDate.toISOString().slice(0, 10) : '',
     job_title: employeeDisplayJob(emp),
     department_id: emp.departmentId ?? '',
     department_name: emp.department?.name?.trim() ?? '',

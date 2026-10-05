@@ -210,9 +210,48 @@ describe('computeSummaryWorkMetrics', () => {
       if (idx >= 0) lines[idx] = abs(iso);
     }
     const metrics = computeSummaryWorkMetrics(lines, 30);
-    expect(metrics.workingDays).toBe(25);
+    // 31 rows − 6 absences = 25, then −1 calendar extra → 24 work (still earns 4)
+    expect(metrics.workingDays).toBe(24);
     expect(metrics.earnedLeaveCapped).toBe(4);
     expect(metrics.actualWorkingDays).toBe(28);
+  });
+
+  it('accrues leave from working days after the 31→30 calendar deduction', () => {
+    const leave = (iso: string) =>
+      exportLine({
+        punchDate: day(iso),
+        isOffDay: true,
+        shiftName: 'إجازة',
+        punchCount: 0,
+        checkInCount: 0,
+        checkOutCount: 0,
+        firstCheckIn: null,
+        lastCheckOut: null,
+        netWorkedHours: 0,
+      });
+    const work = (iso: string) => exportLine({ punchDate: day(iso) });
+    const lines: PunchReportExportLine[] = [];
+    for (let d = 26; d <= 31; d++) lines.push(work(`2026-08-${d}`));
+    for (let d = 1; d <= 25; d++) {
+      lines.push(work(`2026-09-${String(d).padStart(2, '0')}`));
+    }
+    for (const iso of [
+      '2026-08-30',
+      '2026-08-31',
+      '2026-09-07',
+      '2026-09-08',
+      '2026-09-14',
+      '2026-09-19',
+      '2026-09-21',
+    ]) {
+      const idx = lines.findIndex((l) => l.punchDate.toISOString().startsWith(iso));
+      if (idx >= 0) lines[idx] = leave(iso);
+    }
+    const metrics = computeSummaryWorkMetrics(lines, 30);
+    // 31 − 7 leave = 24, then −1 calendar extra → 23 work → 3 earned = 26 actual
+    expect(metrics.workingDays).toBe(23);
+    expect(metrics.earnedLeaveCapped).toBe(3);
+    expect(metrics.actualWorkingDays).toBe(26);
   });
 
   it('returns zero actual days when there are no lines', () => {

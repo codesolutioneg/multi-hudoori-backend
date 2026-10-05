@@ -125,6 +125,8 @@ router.post('/deductions/confirm-branch-import', requireAuth, requireHr, asyncHa
   const result = await confirmDeductionBranchImport({
     lines,
     date: params.date ? String(params.date) : undefined,
+    dateFrom: params.dateFrom ? String(params.dateFrom) : undefined,
+    dateTo: params.dateTo ? String(params.dateTo) : undefined,
     deviceId: params.deviceId ? String(params.deviceId) : null,
   });
   await writeAudit({

@@ -8,12 +8,19 @@ import { hashPassword, userInfoJson } from '../services/auth.service';
 import { sendUserCredentialsEmail } from '../services/mail.service';
 import { isLocationScopedHrRole } from '../services/userLocationScope.service';
 import { listFeatureGrants, setFeatureGrant, AUDIT_FEATURE } from '../services/auditLog.service';
+import {
+  assertCanCreateDashboardUsers,
+  assertCanCreateEmployees,
+  roleTakesSeat,
+} from '../services/licenseQuota.service';
 import { randomBytes } from 'crypto';
 import companiesRoutes from './admin.companies.routes';
+import salesPlansRoutes from './admin.sales.routes';
 
 const router = Router();
 
 router.use(companiesRoutes);
+router.use(salesPlansRoutes);
 
 function params(req: { rpcParams?: Record<string, unknown> }) {
   return req.rpcParams ?? {};
@@ -79,6 +86,15 @@ router.post(
       return;
     }
 
+    const createsProfile =
+      userRole === UserRole.EMPLOYEE ||
+      userRole === UserRole.HR_USER ||
+      userRole === UserRole.HR_SUPERVISOR ||
+      userRole === UserRole.HR_MANAGER;
+    // Check both seats before the user insert so a full employee quota never leaves an orphan login.
+    if (roleTakesSeat(userRole)) await assertCanCreateDashboardUsers(companyId, 1);
+    if (createsProfile) await assertCanCreateEmployees(companyId, 1);
+
     const user = await prisma.user.create({
       data: {
         companyId,
@@ -93,12 +109,7 @@ router.post(
       include: { location: true },
     });
 
-    if (
-      userRole === UserRole.EMPLOYEE ||
-      userRole === UserRole.HR_USER ||
-      userRole === UserRole.HR_SUPERVISOR ||
-      userRole === UserRole.HR_MANAGER
-    ) {
+    if (createsProfile) {
       await prisma.employeeProfile.create({
         data: {
           companyId,
@@ -231,6 +242,11 @@ router.post(
       include: { location: true },
     });
 
+    const company = await prismaBase.company.findUnique({
+      where: { id: companyId },
+      select: { code: true, name: true },
+    });
+
     const emailResult = await sendUserCredentialsEmail({
       name: updated.name,
       login: updated.login,
@@ -238,6 +254,9 @@ router.post(
       password,
       role: updated.role,
       kind: 'reset',
+      companyCode: company?.code,
+      companyName: company?.name,
+      subject: 'حضوري — بيانات الدخول الجديدة',
     });
 
     const message = emailResult.sent

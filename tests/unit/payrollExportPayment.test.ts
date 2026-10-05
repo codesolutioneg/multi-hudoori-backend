@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EmployeeProfile, PayrollLine } from '@prisma/client';
 import {
+  fawryWorkPhone,
   isResigned,
   payrollPaymentMethod,
 } from '../../src/services/payrollExport.service';
@@ -54,6 +55,21 @@ describe('payrollExport payment method (Odoo cash for departed)', () => {
     ).toBe('كاش');
     expect(payrollPaymentMethod(line(emp({ hasFawryAccount: true })))).toBe('فوري');
     expect(payrollPaymentMethod(line(emp({ hasFawryAccount: false })))).toBe('كاش');
+  });
+
+  it('Fawry Excel phone falls back to mobilePhone when workPhone is empty', () => {
+    expect(
+      fawryWorkPhone(line(emp({ workPhone: null, fawryAccount: null, mobilePhone: '1107580453' }))),
+    ).toBe('1107580453');
+    expect(
+      fawryWorkPhone(line(emp({ workPhone: '01011457246', mobilePhone: '1107580453' }))),
+    ).toBe('01011457246');
+    expect(
+      fawryWorkPhone(line(emp({ workPhone: null, fawryAccount: '01278842387', mobilePhone: '1107580453' }))),
+    ).toBe('01278842387');
+    expect(
+      fawryWorkPhone(line(emp({ workPhone: null, fawryAccount: '', mobilePhone: null }))),
+    ).toBe('');
   });
 
   it('uses frozen paymentMethod even after archive', () => {

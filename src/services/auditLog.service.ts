@@ -81,6 +81,21 @@ export const AUDIT_FIELD_LABELS_AR: Record<string, string> = {
   identificationId: 'كود البصمة',
   mobileLine: 'خط الموبايل',
   shiftId: 'الشيفت',
+  manualOt: 'إضافي يدوي',
+  reject: 'مرفوض',
+  isOff: 'راحة',
+  isSick: 'إجازة مرضية',
+  isAnnualLeave: 'إجازة سنوية',
+  isExcluded: 'مستبعد',
+  isBusDelay: 'تأخير باص',
+  isPresent: 'حضور',
+  isFinished: 'إنهاء',
+  isResignation: 'استقالة',
+  isWorkAbsence: 'غياب',
+  isWorkInjury: 'إصابة عمل',
+  isMarriageLeave: 'إجازة زواج',
+  employeeId: 'الموظف',
+  managerId: 'المدير',
   gridId: 'الجدول',
   dateFrom: 'من تاريخ',
   dateTo: 'إلى تاريخ',
@@ -102,6 +117,8 @@ export const AUDIT_ACTION_LABELS_AR: Record<string, string> = {
   'shift_grid.delete': 'حذف جدول شيفت',
   'shift_grid.export': 'تصدير جدول شيفت',
   'shift_grid.import': 'استيراد جدول شيفت',
+  'shift_grid.monthly_reports.export': 'تصدير قالب التقارير الشهرية',
+  'shift_grid.monthly_reports.import': 'استيراد التقارير الشهرية',
   'shift_grid.clear_assignments': 'مسح تعيينات الجدول',
   'shift_grid.wipe_employees': 'إزالة موظفي الجدول',
   'shift_grid.create_all_locations': 'إنشاء جداول لكل الفروع',
@@ -122,6 +139,7 @@ export const AUDIT_ACTION_LABELS_AR: Record<string, string> = {
   'hiring.cancel': 'إلغاء تعيين',
   'deductions.create': 'إنشاء استقطاع',
   'deductions.cancel': 'إلغاء استقطاع',
+  'deductions.delete_bulk': 'حذف استقطاعات معلّقة',
   'deductions.import': 'استيراد استقطاعات',
   'deductions.distribute': 'توزيع استقطاعات',
   'deductions.export': 'تصدير قالب استقطاعات',
@@ -144,12 +162,12 @@ export const AUDIT_COUNT_LABELS_AR: Record<string, string> = {
   archived: 'تم أرشفتها',
 };
 
-const FK_FIELDS = new Set([
-  'departmentId',
-  'locationId',
-  'insuranceCompanyId',
-  'medicalInsuranceCompanyId',
-]);
+/** Prisma cuid / cuid2-style ids — never show these raw in the audit UI. */
+export function looksLikeEntityId(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const t = value.trim();
+  return /^c[a-z0-9]{20,}$/i.test(t);
+}
 
 function truncateValue(v: unknown): unknown {
   if (typeof v === 'string' && v.length > PREVIEW_MAX_STR) {
@@ -170,11 +188,13 @@ type NameMaps = {
   departments: Map<string, string>;
   locations: Map<string, string>;
   insurance: Map<string, string>;
+  employees: Map<string, string>;
+  shifts: Map<string, string>;
 };
 
-let cachedNameMaps: { at: number; maps: NameMaps } | null = null;
+let cachedNameMaps: { at: number; maps: Omit<NameMaps, 'employees' | 'shifts'> } | null = null;
 
-async function loadNameMaps(): Promise<NameMaps> {
+async function loadStaticNameMaps(): Promise<Omit<NameMaps, 'employees' | 'shifts'>> {
   const now = Date.now();
   if (cachedNameMaps && now - cachedNameMaps.at < 60_000) return cachedNameMaps.maps;
   const [departments, locations, insurance] = await Promise.all([
@@ -182,13 +202,79 @@ async function loadNameMaps(): Promise<NameMaps> {
     prisma.location.findMany({ select: { id: true, name: true } }),
     prisma.insuranceCompany.findMany({ select: { id: true, name: true } }),
   ]);
-  const maps: NameMaps = {
+  const maps = {
     departments: new Map(departments.map((d) => [d.id, d.name])),
     locations: new Map(locations.map((l) => [l.id, l.name])),
     insurance: new Map(insurance.map((i) => [i.id, i.name])),
   };
   cachedNameMaps = { at: now, maps };
   return maps;
+}
+
+function formatEmployeeLabel(name: string, code?: string | null): string {
+  const n = name.trim();
+  const c = code?.trim() ?? '';
+  if (n && c) return `${n} (${c})`;
+  return n || c || '—';
+}
+
+function formatShiftLabel(name?: string | null, code?: string | null): string {
+  const n = name?.trim() ?? '';
+  const c = code?.trim() ?? '';
+  if (c && n) return `${c} — ${n}`;
+  return c || n || '—';
+}
+
+async function loadNameMapsForRows(rows: AuditDiffRow[]): Promise<NameMaps> {
+  const staticMaps = await loadStaticNameMaps();
+  const employeeIds = new Set<string>();
+  const shiftIds = new Set<string>();
+
+  for (const r of rows) {
+    const field = r.field ?? '';
+    for (const raw of [r.entityLabel, r.entityId, r.before, r.after]) {
+      if (!looksLikeEntityId(raw)) continue;
+      const id = String(raw).trim();
+      if (field === 'shiftId' && (raw === r.before || raw === r.after)) {
+        shiftIds.add(id);
+      } else if (field === 'employeeId' || field === 'managerId') {
+        employeeIds.add(id);
+      } else if (raw === r.entityLabel || raw === r.entityId) {
+        employeeIds.add(id);
+      }
+    }
+    // entityLabel on shift-grid cell updates is the employee id.
+    if (looksLikeEntityId(r.entityLabel)) employeeIds.add(String(r.entityLabel).trim());
+    if (field === 'shiftId') {
+      if (looksLikeEntityId(r.before)) shiftIds.add(String(r.before).trim());
+      if (looksLikeEntityId(r.after)) shiftIds.add(String(r.after).trim());
+    }
+  }
+
+  const [employees, shifts] = await Promise.all([
+    employeeIds.size
+      ? prisma.employeeProfile.findMany({
+          where: { id: { in: [...employeeIds] } },
+          select: { id: true, name: true, code: true },
+        })
+      : Promise.resolve([]),
+    shiftIds.size
+      ? prisma.shift.findMany({
+          where: { id: { in: [...shiftIds] } },
+          select: { id: true, name: true, code: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  return {
+    ...staticMaps,
+    employees: new Map(
+      employees.map((e) => [e.id, formatEmployeeLabel(e.name, e.code)]),
+    ),
+    shifts: new Map(
+      shifts.map((s) => [s.id, formatShiftLabel(s.name, s.code)]),
+    ),
+  };
 }
 
 function formatScalar(v: unknown): string {
@@ -216,14 +302,33 @@ function formatScalar(v: unknown): string {
 
 function resolveFk(field: string | undefined, value: unknown, maps: NameMaps): string {
   if (value == null || value === '') return '—';
-  const id = String(value);
-  if (!field || !FK_FIELDS.has(field)) return formatScalar(value);
-  if (field === 'departmentId') return maps.departments.get(id) ?? id;
-  if (field === 'locationId') return maps.locations.get(id) ?? id;
+  const id = String(value).trim();
+  if (field === 'departmentId') return maps.departments.get(id) ?? (looksLikeEntityId(id) ? '—' : formatScalar(value));
+  if (field === 'locationId') return maps.locations.get(id) ?? (looksLikeEntityId(id) ? '—' : formatScalar(value));
   if (field === 'insuranceCompanyId' || field === 'medicalInsuranceCompanyId') {
-    return maps.insurance.get(id) ?? id;
+    return maps.insurance.get(id) ?? (looksLikeEntityId(id) ? '—' : formatScalar(value));
+  }
+  if (field === 'shiftId') return maps.shifts.get(id) ?? (looksLikeEntityId(id) ? '—' : formatScalar(value));
+  if (field === 'employeeId' || field === 'managerId') {
+    return maps.employees.get(id) ?? (looksLikeEntityId(id) ? '—' : formatScalar(value));
+  }
+  if (looksLikeEntityId(id)) {
+    return maps.employees.get(id) ?? maps.shifts.get(id) ?? '—';
   }
   return formatScalar(value);
+}
+
+function resolveEntityLabel(row: AuditDiffRow, maps: NameMaps): string | undefined {
+  const label = row.entityLabel?.trim();
+  if (label) {
+    if (!looksLikeEntityId(label)) return label;
+    return maps.employees.get(label) ?? maps.shifts.get(label) ?? '—';
+  }
+  const id = row.entityId?.trim();
+  if (id && looksLikeEntityId(id)) {
+    return maps.employees.get(id) ?? maps.shifts.get(id) ?? undefined;
+  }
+  return label;
 }
 
 export type HumanAuditDiffRow = AuditDiffRow & {
@@ -234,11 +339,14 @@ export type HumanAuditDiffRow = AuditDiffRow & {
 
 export async function humanizeDiffRows(rows: AuditDiffRow[] | undefined | null): Promise<HumanAuditDiffRow[]> {
   if (!rows?.length) return [];
-  const maps = await loadNameMaps();
+  const maps = await loadNameMapsForRows(rows);
   return rows.map((r) => {
     const field = r.field ?? '';
+    const entityLabel = resolveEntityLabel(r, maps);
     return {
       ...r,
+      // Prefer human labels for the UI; keep entityId as the technical id.
+      entityLabel: entityLabel ?? r.entityLabel,
       fieldLabel: AUDIT_FIELD_LABELS_AR[field] ?? field,
       beforeDisplay: resolveFk(field, r.before, maps),
       afterDisplay: resolveFk(field, r.after, maps),
@@ -771,7 +879,7 @@ export async function exportAuditLogXlsx(id: string) {
     ['المستخدم', row.actorName ? `${row.actorName} (${row.actorLogin})` : row.actorLogin],
     ['الدور', row.actorRole ?? ''],
     ['الوحدة', row.module],
-    ['الإجراء', row.action],
+    ['الإجراء', (row as { actionLabel?: string }).actionLabel ?? row.action],
     ['الكيان', [row.entityType, row.entityId].filter(Boolean).join(' / ')],
     ['الملخص', row.summary],
     ['المسار', row.route ?? ''],
@@ -789,42 +897,93 @@ export async function exportAuditLogXlsx(id: string) {
     summary.getCell(r, 1).value = 'الإحصاءات';
     summary.getCell(r, 1).font = { bold: true };
     r++;
-    for (const [k, v] of Object.entries(row.counts as Record<string, unknown>)) {
+    const countsDisplay =
+      (row as { countsDisplay?: Record<string, unknown> }).countsDisplay ??
+      (row.counts as Record<string, unknown>);
+    for (const [k, v] of Object.entries(countsDisplay)) {
       summary.getCell(r, 1).value = k;
       summary.getCell(r, 2).value = typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
       r++;
     }
   }
 
-  const changesSheet = workbook.addWorksheet('التغييرات');
-  changesSheet.views = [{ rightToLeft: true }];
-  const headers = ['كيان', 'تسمية', 'الحقل', 'قبل', 'بعد', 'ملاحظة'];
-  headers.forEach((h, i) => {
-    changesSheet.getCell(1, i + 1).value = h;
-    changesSheet.getCell(1, i + 1).font = { bold: true };
-  });
-  [18, 28, 22, 28, 28, 24].forEach((w, i) => {
-    changesSheet.getColumn(i + 1).width = w;
-  });
-
   const changeRows = await humanizeDiffRows(collectChangeRows(row));
+  const isMonthlyImport = row.action === 'shift_grid.monthly_reports.import';
 
-  changeRows.forEach((c, idx) => {
-    const r = idx + 2;
-    changesSheet.getCell(r, 1).value = c.entityId ?? '';
-    changesSheet.getCell(r, 2).value = c.entityLabel ?? '';
-    changesSheet.getCell(r, 3).value = c.fieldLabel ?? c.field ?? '';
-    changesSheet.getCell(r, 4).value = c.beforeDisplay ?? formatScalar(c.before);
-    changesSheet.getCell(r, 5).value = c.afterDisplay ?? formatScalar(c.after);
-    changesSheet.getCell(r, 6).value = c.note ?? '';
-  });
+  if (isMonthlyImport) {
+    const applied = changeRows.filter((c) => c.field !== 'reject');
+    const rejected = changeRows.filter((c) => c.field === 'reject');
+
+    const appliedSheet = workbook.addWorksheet('التعديلات');
+    appliedSheet.views = [{ rightToLeft: true }];
+    const appliedHeaders = ['الكود', 'الموظف', 'النوع', 'قبل', 'بعد', 'التفاصيل'];
+    appliedHeaders.forEach((h, i) => {
+      appliedSheet.getCell(1, i + 1).value = h;
+      appliedSheet.getCell(1, i + 1).font = { bold: true };
+    });
+    [14, 28, 16, 22, 22, 48].forEach((w, i) => {
+      appliedSheet.getColumn(i + 1).width = w;
+    });
+    applied.forEach((c, idx) => {
+      const r = idx + 2;
+      appliedSheet.getCell(r, 1).value = c.entityId ?? '';
+      appliedSheet.getCell(r, 2).value = c.entityLabel ?? '';
+      appliedSheet.getCell(r, 3).value = c.fieldLabel ?? c.field ?? '';
+      appliedSheet.getCell(r, 4).value = c.beforeDisplay ?? formatScalar(c.before);
+      appliedSheet.getCell(r, 5).value = c.afterDisplay ?? formatScalar(c.after);
+      appliedSheet.getCell(r, 6).value = c.note ?? '';
+    });
+
+    const rejectedSheet = workbook.addWorksheet('المرفوض');
+    rejectedSheet.views = [{ rightToLeft: true }];
+    const rejectedHeaders = ['الكود', 'الموظف', 'التاريخ', 'سبب الرفض'];
+    rejectedHeaders.forEach((h, i) => {
+      rejectedSheet.getCell(1, i + 1).value = h;
+      rejectedSheet.getCell(1, i + 1).font = { bold: true };
+    });
+    [14, 28, 14, 48].forEach((w, i) => {
+      rejectedSheet.getColumn(i + 1).width = w;
+    });
+    rejected.forEach((c, idx) => {
+      const r = idx + 2;
+      rejectedSheet.getCell(r, 1).value = c.entityId ?? '';
+      rejectedSheet.getCell(r, 2).value = c.entityLabel ?? '';
+      rejectedSheet.getCell(r, 3).value = c.beforeDisplay ?? formatScalar(c.before);
+      rejectedSheet.getCell(r, 4).value = c.note ?? '';
+    });
+  } else {
+    const changesSheet = workbook.addWorksheet('التغييرات');
+    changesSheet.views = [{ rightToLeft: true }];
+    const headers = ['الكود / كيان', 'الموظف / التسمية', 'الحقل', 'قبل', 'بعد', 'ملاحظة'];
+    headers.forEach((h, i) => {
+      changesSheet.getCell(1, i + 1).value = h;
+      changesSheet.getCell(1, i + 1).font = { bold: true };
+    });
+    [18, 28, 22, 28, 28, 36].forEach((w, i) => {
+      changesSheet.getColumn(i + 1).width = w;
+    });
+
+    changeRows.forEach((c, idx) => {
+      const r = idx + 2;
+      changesSheet.getCell(r, 1).value = c.entityId ?? '';
+      changesSheet.getCell(r, 2).value = c.entityLabel ?? '';
+      changesSheet.getCell(r, 3).value = c.fieldLabel ?? c.field ?? '';
+      changesSheet.getCell(r, 4).value = c.beforeDisplay ?? formatScalar(c.before);
+      changesSheet.getCell(r, 5).value = c.afterDisplay ?? formatScalar(c.after);
+      changesSheet.getCell(r, 6).value = c.note ?? '';
+    });
+  }
 
   const full = workbook.addWorksheet('بيانات كاملة');
   full.views = [{ rightToLeft: true }];
   full.getColumn(1).width = 100;
   full.getCell(1, 1).value = 'Payload JSON';
   full.getCell(1, 1).font = { bold: true };
-  full.getCell(2, 1).value = JSON.stringify(row.payload ?? { diffPreview: changeRows, counts: row.counts }, null, 2);
+  full.getCell(2, 1).value = JSON.stringify(
+    row.payload ?? { diffPreview: changeRows, counts: row.counts },
+    null,
+    2,
+  );
 
   const meta = workbook.addWorksheet('Meta');
   meta.getColumn(1).width = 20;

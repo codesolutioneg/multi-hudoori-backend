@@ -19,6 +19,11 @@ export const PAYROLL_JOURNAL_ACCOUNT_CODES = {
 export type PayrollJournalLineInput = {
   basicSalary?: number | null;
   totalEarnings?: number | null;
+  grossSalary?: number | null;
+  workingDays?: number | null;
+  overtimeHours?: number | null;
+  workDaysSalary?: number | null;
+  overtimeAmount?: number | null;
   lateDeduction?: number | null;
   punchDeductionCheckin?: number | null;
   lateCheckoutDeduction?: number | null;
@@ -39,6 +44,7 @@ export type PayrollJournalLineInput = {
   employee?: {
     insuranceSalary?: number | null;
     medicalInsuranceSalary?: number | null;
+    basicSalary?: number | null;
     hasFawryAccount?: boolean | null;
     active?: boolean | null;
     departureDate?: Date | string | null;
@@ -73,9 +79,30 @@ export function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Same earnings resolution as payroll Excel export
+ * (`computePayrollLineExcelTotals`): when the line has no basicSalary,
+ * fall back to the employee profile basic and rebuild from days/OT.
+ * Keeps Odoo journal debit aligned with the Excel sent to Odoo.
+ */
+export function resolvePayrollLineEarnings(line: PayrollJournalLineInput): number {
+  const stored = round2(line.totalEarnings || line.grossSalary || 0);
+  if (line.basicSalary && line.basicSalary > 0) {
+    return stored;
+  }
+  const basic = line.basicSalary || line.employee?.basicSalary || 0;
+  if (basic > 0) {
+    const daily = basic / 30;
+    const workDaysSal = round2(daily * (line.workingDays || 0));
+    const overtimeAmt = round2(daily * (line.overtimeHours || 0));
+    return round2(workDaysSal + overtimeAmt);
+  }
+  return stored;
+}
+
 /** Odoo `_penalty_total` — P+R+T+V + أيام×اليومي + مبلغ الجزاء + كسر + غرامات */
 export function penaltyTotal(line: PayrollJournalLineInput): number {
-  const basic = line.basicSalary || 0;
+  const basic = line.basicSalary || line.employee?.basicSalary || 0;
   const daily = basic ? basic / 30 : 0;
   return round2(
     round2(line.lateDeduction || 0) +
@@ -109,7 +136,7 @@ export function computePayrollJournalAmounts(
   const empMed = round2(lines.reduce((s, l) => s + employeeMedical(l), 0));
   const coSoc = empSoc ? round2((empSoc / 0.11) * 0.1875) : 0;
   const totalEarnings = round2(
-    lines.reduce((s, l) => s + (l.totalEarnings || 0), 0),
+    lines.reduce((s, l) => s + resolvePayrollLineEarnings(l), 0),
   );
   const penalties = round2(lines.reduce((s, l) => s + penaltyTotal(l), 0));
   const longTermAdvance = round2(

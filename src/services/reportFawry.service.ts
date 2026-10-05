@@ -3,9 +3,8 @@
  *
  * HR's requirement is not just "who has a card": a ticked flag with no number
  * next to it is bad data, not coverage. That case is reported as its own status
- * and highlighted, because it silently breaks the Fawry payroll export, which
- * pays on `hasFawryAccount` while taking the phone from `fawryAccount`
- * (payrollExport.service.ts fawryWorkPhone).
+ * and highlighted, because a ticked flag with no stored Fawry number used to
+ * silently blank the payroll Fawry Excel (payrollExport.service.ts fawryWorkPhone).
  */
 import {
   dateOnly,
@@ -82,10 +81,9 @@ const NUMBER_SOURCE_LABELS: Record<FawryNumberSource, string> = {
  * Fall back to the phones HR already has, and report which one was used so a
  * fallback is never mistaken for a confirmed Fawry number.
  *
- * Work phone comes before the mobiles because that is the number the Fawry
- * payroll export pays on (payrollExport.service.ts fawryWorkPhone). The
- * employees Excel prefers the mobile instead, which is right for a contact
- * sheet but wrong here.
+ * Work phone comes before the mobiles so this report matches payroll Fawry
+ * Excel (payrollExport.service.ts fawryWorkPhone), which now also falls back
+ * to mobilePhone after workPhone / fawryAccount.
  */
 export function resolveFawryNumber(
   emp: Pick<EmployeeWithReportRelations, 'fawryAccount' | 'workPhone' | 'mobilePhone' | 'mapping'>,

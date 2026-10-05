@@ -62,12 +62,38 @@ function buildWelcomeHtml(params: {
   password: string;
   role: string;
   siteUrl: string;
+  companyCode?: string;
+  companyName?: string;
+  phone?: string;
+  maxEmployees?: number | null;
+  planName?: string;
 }): string {
   const name = escapeHtml(params.name);
   const login = escapeHtml(params.login);
   const password = escapeHtml(params.password);
   const role = escapeHtml(params.role);
   const siteUrl = escapeHtml(params.siteUrl);
+  const companyCode = params.companyCode ? escapeHtml(params.companyCode) : '';
+  const companyName = params.companyName ? escapeHtml(params.companyName) : '';
+  const phone = params.phone ? escapeHtml(params.phone) : '';
+  const planName = params.planName ? escapeHtml(params.planName) : '';
+  const maxEmployees =
+    params.maxEmployees != null && Number.isFinite(params.maxEmployees)
+      ? String(params.maxEmployees)
+      : '';
+
+  const companyBlock = companyCode
+    ? `<div style="font-size:12px;color:#64748B;margin-bottom:4px;">معرف الشركة</div>
+                    <div style="font-size:15px;font-weight:700;margin-bottom:14px;direction:ltr;text-align:right;">${companyCode}</div>
+                    ${companyName ? `<div style="font-size:12px;color:#64748B;margin-bottom:4px;">اسم الشركة</div>
+                    <div style="font-size:15px;font-weight:700;margin-bottom:14px;">${companyName}</div>` : ''}
+                    ${maxEmployees ? `<div style="font-size:12px;color:#64748B;margin-bottom:4px;">حد الموظفين</div>
+                    <div style="font-size:15px;font-weight:700;margin-bottom:14px;">${maxEmployees}</div>` : ''}
+                    ${planName ? `<div style="font-size:12px;color:#64748B;margin-bottom:4px;">الباقة</div>
+                    <div style="font-size:15px;font-weight:700;margin-bottom:14px;">${planName}</div>` : ''}
+                    ${phone ? `<div style="font-size:12px;color:#64748B;margin-bottom:4px;">الهاتف</div>
+                    <div style="font-size:15px;font-weight:700;margin-bottom:14px;direction:ltr;text-align:right;">${phone}</div>` : ''}`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -105,6 +131,7 @@ function buildWelcomeHtml(params: {
                     <div style="font-size:15px;font-weight:700;margin-bottom:14px;">${name}</div>
                     <div style="font-size:12px;color:#64748B;margin-bottom:4px;">الدور</div>
                     <div style="font-size:15px;font-weight:700;margin-bottom:14px;">${role}</div>
+                    ${companyBlock}
                     <div style="font-size:12px;color:#64748B;margin-bottom:4px;">اسم المستخدم / البريد</div>
                     <div style="font-size:15px;font-weight:700;margin-bottom:14px;direction:ltr;text-align:right;">${login}</div>
                     <div style="font-size:12px;color:#64748B;margin-bottom:4px;">كلمة المرور</div>
@@ -149,12 +176,22 @@ function buildWelcomeText(params: {
   password: string;
   role: string;
   siteUrl: string;
+  companyCode?: string;
+  companyName?: string;
+  phone?: string;
+  maxEmployees?: number | null;
+  planName?: string;
 }): string {
   return [
     `مرحباً ${params.name}`,
     '',
     'تم إنشاء حسابك في منصة حضوري.',
     `الدور: ${params.role}`,
+    ...(params.companyCode ? [`معرف الشركة: ${params.companyCode}`] : []),
+    ...(params.companyName ? [`اسم الشركة: ${params.companyName}`] : []),
+    ...(params.maxEmployees != null ? [`حد الموظفين: ${params.maxEmployees}`] : []),
+    ...(params.planName ? [`الباقة: ${params.planName}`] : []),
+    ...(params.phone ? [`الهاتف: ${params.phone}`] : []),
     `اسم المستخدم: ${params.login}`,
     `كلمة المرور: ${params.password}`,
     `رابط المنصة: ${params.siteUrl}`,
@@ -176,6 +213,13 @@ export async function sendUserCredentialsEmail(params: {
   password: string;
   role: UserRole | string;
   kind?: 'welcome' | 'reset';
+  /** Optional Multi tenancy fields (same SMTP/send path as single-company). */
+  companyCode?: string;
+  companyName?: string;
+  phone?: string;
+  maxEmployees?: number | null;
+  planName?: string;
+  subject?: string;
 }): Promise<{ sent: boolean; to?: string; error?: string }> {
   const to = resolveRecipient(params.login, params.email);
   if (!to) {
@@ -192,9 +236,10 @@ export async function sendUserCredentialsEmail(params: {
   const role = roleLabelAr(params.role);
   const kind = params.kind ?? 'welcome';
   const subject =
-    kind === 'reset'
+    params.subject?.trim() ||
+    (kind === 'reset'
       ? 'حضوري — تم إعادة تعيين كلمة المرور'
-      : 'حضوري — بيانات الدخول إلى حسابك';
+      : 'حضوري — بيانات الدخول إلى حسابك');
 
   const html = buildWelcomeHtml({
     name: params.name,
@@ -202,6 +247,11 @@ export async function sendUserCredentialsEmail(params: {
     password: params.password,
     role,
     siteUrl,
+    companyCode: params.companyCode,
+    companyName: params.companyName,
+    phone: params.phone,
+    maxEmployees: params.maxEmployees,
+    planName: params.planName,
   });
   const text = buildWelcomeText({
     name: params.name,
@@ -209,6 +259,11 @@ export async function sendUserCredentialsEmail(params: {
     password: params.password,
     role,
     siteUrl,
+    companyCode: params.companyCode,
+    companyName: params.companyName,
+    phone: params.phone,
+    maxEmployees: params.maxEmployees,
+    planName: params.planName,
   });
 
   try {
@@ -219,7 +274,7 @@ export async function sendUserCredentialsEmail(params: {
       text,
       html,
     });
-    logger.info({ to, kind }, 'Credentials email sent');
+    logger.info({ to, kind, companyCode: params.companyCode }, 'Credentials email sent');
     return { sent: true, to };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -307,6 +362,34 @@ export async function sendPasswordResetLinkEmail(params: {
     logger.error({ err, to }, 'Failed to send password reset email');
     return { sent: false, to, error: message };
   }
+}
+
+/** After sales-request approval — same SMTP path as prod credentials mail. */
+export async function sendRegistrationSuccessEmail(params: {
+  name: string;
+  login: string;
+  email?: string | null;
+  password: string;
+  companyCode: string;
+  companyName?: string;
+  phone?: string;
+  maxEmployees?: number | null;
+  planName?: string;
+}): Promise<{ sent: boolean; to?: string; error?: string }> {
+  return sendUserCredentialsEmail({
+    name: params.name,
+    login: params.login,
+    email: params.email,
+    password: params.password,
+    role: 'HR_MANAGER',
+    kind: 'welcome',
+    companyCode: params.companyCode,
+    companyName: params.companyName,
+    phone: params.phone,
+    maxEmployees: params.maxEmployees,
+    planName: params.planName,
+    subject: 'حضوري — تم تفعيل اشتراك شركتك بنجاح',
+  });
 }
 
 export type LoanNotificationLine = {

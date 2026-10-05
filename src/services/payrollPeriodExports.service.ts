@@ -26,6 +26,8 @@ export type PeriodPayrollSummaryRow = {
   payrollId: string;
   /** إجمالي — same as payroll list period header (cash + fawry with commission). */
   salaries: number;
+  /** إجمالي الاستحقاقات قبل الخصومات. */
+  totalEarnings: number;
   companySocial: number;
   penalties: number;
   longAdvance: number;
@@ -121,6 +123,7 @@ export function buildPeriodPayrollSummaryRow(params: {
     payrollId: params.payrollId,
     // Match list header «إجمالي» / «صافي» — not journal totalEarnings (gross before deductions).
     salaries: excel.grandTotal,
+    totalEarnings: excel.totalEarnings,
     companySocial: journal.companySocial,
     penalties: journal.penalties,
     longAdvance: journal.longTermAdvance,
@@ -147,6 +150,7 @@ export function sumPeriodPayrollSummaryRows(
 > {
   const sum = {
     salaries: 0,
+    totalEarnings: 0,
     companySocial: 0,
     penalties: 0,
     longAdvance: 0,
@@ -165,6 +169,7 @@ export function sumPeriodPayrollSummaryRows(
   };
   for (const r of rows) {
     sum.salaries += r.salaries;
+    sum.totalEarnings += r.totalEarnings;
     sum.companySocial += r.companySocial;
     sum.penalties += r.penalties;
     sum.longAdvance += r.longAdvance;
@@ -183,6 +188,7 @@ export function sumPeriodPayrollSummaryRows(
   }
   return {
     salaries: journalRound2(sum.salaries),
+    totalEarnings: journalRound2(sum.totalEarnings),
     companySocial: journalRound2(sum.companySocial),
     penalties: journalRound2(sum.penalties),
     longAdvance: journalRound2(sum.longAdvance),
@@ -255,10 +261,84 @@ export async function buildPeriodPayrollSummaryRows(params: {
   };
 }
 
-const SUMMARY_HEADERS = [
+export type PeriodPayrollEmployeeSearchRow = {
+  payrollId: string;
+  employeeId: string;
+  employeeCode: string;
+  employeeName: string;
+  branchName: string;
+  payrollName: string;
+};
+
+export async function searchPeriodPayrollEmployees(params: {
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  search?: string | null;
+  limit?: number;
+}): Promise<{
+  items: PeriodPayrollEmployeeSearchRow[];
+  count: number;
+  limited: boolean;
+}> {
+  const { from, to } = requirePeriod(params.dateFrom, params.dateTo);
+  const search = String(params.search ?? '').trim();
+  if (!search) return { items: [], count: 0, limited: false };
+  const limit = Math.min(Math.max(params.limit ?? 100, 1), 100);
+  const where = {
+    payroll: { dateFrom: from, dateTo: to },
+    OR: [
+      { employeeCode: { contains: search, mode: 'insensitive' as const } },
+      {
+        employee: {
+          code: { contains: search, mode: 'insensitive' as const },
+        },
+      },
+      {
+        employee: {
+          name: { contains: search, mode: 'insensitive' as const },
+        },
+      },
+    ],
+  };
+  const [count, lines] = await Promise.all([
+    prisma.payrollLine.count({ where }),
+    prisma.payrollLine.findMany({
+      where,
+      select: {
+        payrollId: true,
+        employeeId: true,
+        employeeCode: true,
+        employee: { select: { code: true, name: true } },
+        payroll: {
+          select: {
+            name: true,
+            shiftGrid: { include: { location: true } },
+          },
+        },
+      },
+      take: limit,
+    }),
+  ]);
+  const items = lines
+    .map((line) => ({
+      payrollId: line.payrollId,
+      employeeId: line.employeeId,
+      employeeCode: line.employeeCode || line.employee.code || '',
+      employeeName: line.employee.name || '',
+      branchName: branchOf(line.payroll),
+      payrollName: line.payroll.name || '',
+    }))
+    .sort(
+      (a, b) =>
+        a.employeeName.localeCompare(b.employeeName, 'ar') ||
+        a.employeeCode.localeCompare(b.employeeCode),
+    );
+  return { items, count, limited: count > items.length };
+}
+
+export const PERIOD_PAYROLL_SUMMARY_HEADERS = [
   'تاريخ القيد',
   'الفرع',
-  'إجمالي',
   'مصروف تأمينات اجتماعية حصة الشركة',
   'جزاءات العاملين',
   'سلف طويلة الأجل',
@@ -271,6 +351,8 @@ const SUMMARY_HEADERS = [
   'إجمالي الكاش',
   'إجمالي الفوري (شامل العمولة)',
   'عمولة فوري (0.15%)',
+  'إجمالي',
+  'إجمالي الاستحقاقات',
   'عدد الموظفين',
   'عدد الاستقالات',
 ] as const;
@@ -287,14 +369,14 @@ export async function exportPeriodPayrollSummaryXlsx(params: {
   sheet.views = [{ rightToLeft: true }];
 
   const title = `ملخص رواتب شهر ${monthLabel}`;
-  sheet.mergeCells(1, 1, 1, SUMMARY_HEADERS.length);
+  sheet.mergeCells(1, 1, 1, PERIOD_PAYROLL_SUMMARY_HEADERS.length);
   sheet.getCell(1, 1).value = title;
   sheet.getCell(1, 1).font = { bold: true, size: 14 };
   sheet.getCell(1, 1).alignment = { horizontal: 'center', vertical: 'middle' };
   sheet.getRow(1).height = 24;
 
   const headerRow = sheet.getRow(3);
-  SUMMARY_HEADERS.forEach((h, i) => {
+  PERIOD_PAYROLL_SUMMARY_HEADERS.forEach((h, i) => {
     const cell = headerRow.getCell(i + 1);
     cell.value = h;
     cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -307,13 +389,14 @@ export async function exportPeriodPayrollSummaryXlsx(params: {
   });
   headerRow.height = 32;
 
-  const moneyCols = new Set([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+  const moneyCols = new Set([
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+  ]);
   let r = 4;
   for (const row of rows) {
     const values: (string | number)[] = [
       row.journalDate,
       row.branchName,
-      row.salaries,
       row.companySocial,
       row.penalties,
       row.longAdvance,
@@ -326,6 +409,8 @@ export async function exportPeriodPayrollSummaryXlsx(params: {
       row.cashTotal,
       row.fawryGrandTotal,
       row.fawryCommission,
+      row.salaries,
+      row.totalEarnings,
       row.activeEmployeeCount,
       row.resignedEmployeeCount,
     ];
@@ -341,7 +426,6 @@ export async function exportPeriodPayrollSummaryXlsx(params: {
   const totalValues: (string | number)[] = [
     'الإجمالي',
     '',
-    totals.salaries,
     totals.companySocial,
     totals.penalties,
     totals.longAdvance,
@@ -354,6 +438,8 @@ export async function exportPeriodPayrollSummaryXlsx(params: {
     totals.cashTotal,
     totals.fawryGrandTotal,
     totals.fawryCommission,
+    totals.salaries,
+    totals.totalEarnings,
     totals.activeEmployeeCount,
     totals.resignedEmployeeCount,
   ];
@@ -369,7 +455,7 @@ export async function exportPeriodPayrollSummaryXlsx(params: {
     if (moneyCols.has(i + 1)) cell.numFmt = '#,##0.00';
   });
 
-  SUMMARY_HEADERS.forEach((_, i) => {
+  PERIOD_PAYROLL_SUMMARY_HEADERS.forEach((_, i) => {
     sheet.getColumn(i + 1).width = i === 1 ? 28 : i === 0 ? 14 : 16;
   });
 

@@ -11,6 +11,9 @@ import { normalizeDocumentStatus } from './employeeDocuments.service';
 import { BIOTIME_PUSH_PROFILE_FIELDS } from './biotime/employeeBiotimeFingerprint';
 import { resolveEmployeeDisplayName } from './serialize.service';
 import { parseEgyptianNationalId } from '../utils/egyptianNationalId';
+import { AppError } from '../utils/errors';
+import { requireCompanyId } from '../tenant/context';
+import { EMPLOYEE_QUOTA_EXCEEDED, remainingEmployeeSeats } from './licenseQuota.service';
 
 /**
  * Legacy Odoo-style employee Excel (row 1 headers RTL, data from row 2).
@@ -705,6 +708,15 @@ export async function exportEmployeesXlsx(filters: EmployeesExportFilters = {}):
 
 export const EMPLOYEE_EXCEL_HEADERS = HEADERS;
 
+/** Excel «الهاتف» writes both phone columns, matching the employee profile save. */
+export function importedExcelPhonePatch(
+  phone: string | undefined | null,
+): { mobilePhone: string; workPhone: string } | null {
+  const value = phone?.trim() ?? '';
+  if (!value) return null;
+  return { mobilePhone: value, workPhone: value };
+}
+
 function normalizeHeader(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -837,8 +849,8 @@ function buildEmployeeDataFromRow(
     data.location = row.Location.trim();
   }
 
-  const phone = row['الهاتف']?.trim();
-  if (phone) data.mobilePhone = phone;
+  const phonePatch = importedExcelPhonePatch(row['الهاتف']);
+  if (phonePatch) Object.assign(data, phonePatch);
 
   const salaryRaw = row['Basic Salary']?.trim() || row['الأجر الأساسي']?.trim();
   if (salaryRaw) data.basicSalary = Number(salaryRaw) || 0;
@@ -1115,6 +1127,29 @@ export async function importEmployeesXlsx(base64: string) {
     before: unknown;
     after: unknown;
   }> = [];
+
+  // Fail fast on seats before any row is written: a partial import past the cap is worse than none.
+  const newCodes = new Set<string>();
+  for (let r = 2; r <= sheet.rowCount; r++) {
+    const row = readRow(sheet, r, headerMap);
+    if (rowIsEmpty(row)) continue;
+    const code = row.Code?.trim().toLowerCase();
+    if (!code || !row['Name-Arabic']?.trim()) continue;
+    if (await findEmployeeForRow(row, byId, byUserId, byCode)) continue;
+    newCodes.add(code);
+  }
+  if (newCodes.size > 0) {
+    const companyId = requireCompanyId();
+    const left = await remainingEmployeeSeats(companyId);
+    if (left != null && newCodes.size > left) {
+      throw new AppError(
+        `الملف يضيف ${newCodes.size} موظف جديد والمتبقي في اشتراك الشركة ${left} فقط. `
+          + 'لم يتم استيراد أي صف — راجع مدير المنصة لزيادة الحد.',
+        400,
+        EMPLOYEE_QUOTA_EXCEEDED,
+      );
+    }
+  }
 
   for (let r = 2; r <= sheet.rowCount; r++) {
     const row = readRow(sheet, r, headerMap);

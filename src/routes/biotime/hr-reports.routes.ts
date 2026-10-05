@@ -322,6 +322,24 @@ router.post('/reports/punch-report/sync-start', requireAuth, requireHr, asyncHan
     return;
   }
 
+  const {
+    isBioTimeConfigured,
+    BIOTIME_LOCAL_FALLBACK_MESSAGE,
+  } = await import('../../services/biotime/biotimeAvailability.service');
+  if (!(await isBioTimeConfigured())) {
+    // Report endpoints only read stored punches — skip BioTime when unreachable/unconfigured.
+    jsonRpcSuccess(
+      res,
+      biotimeOk({
+        queued: false,
+        usedLocal: true,
+        message: BIOTIME_LOCAL_FALLBACK_MESSAGE,
+      }),
+      req.rpcId,
+    );
+    return;
+  }
+
   const employees = await findReportEmployees(scope);
   const { codes } = await resolveEmployeesBiotimeCodes(employees.map((e) => e.id));
   const jobId = await queuePunchReportSync({

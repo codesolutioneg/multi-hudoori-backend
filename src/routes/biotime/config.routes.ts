@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../middlewares/asyncHandler';
 import { jsonRpcSuccess, biotimeOk, biotimeFail } from '../../middlewares/jsonRpc';
-import { requireAuth, requireHrManager } from '../../middlewares/auth';
+import { requireAuth, requireHr, requireHrManager } from '../../middlewares/auth';
+import { getQuotaSnapshot } from '../../services/licenseQuota.service';
+import { requireCompanyId } from '../../tenant/context';
 import { p, parseRpcBool, getConfig } from './route-helpers';
 import { BioTimeConnector } from '../../services/biotime/biotimeConnector.service';
 import { Prisma } from '@prisma/client';
@@ -181,6 +183,12 @@ router.post('/company/logo/get', requireAuth, requireHrManager, asyncHandler(asy
     return;
   }
   jsonRpcSuccess(res, biotimeOk(file), req.rpcId);
+}));
+
+/** Read-only seats for HR screens; only the platform admin can change them. */
+router.post('/company/quota', requireAuth, requireHr, asyncHandler(async (req, res) => {
+  const quota = await getQuotaSnapshot(requireCompanyId());
+  jsonRpcSuccess(res, biotimeOk({ quota }), req.rpcId);
 }));
 
 router.post('/company/logo/delete', requireAuth, requireHrManager, asyncHandler(async (req, res) => {

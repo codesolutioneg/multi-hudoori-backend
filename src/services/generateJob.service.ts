@@ -391,17 +391,27 @@ export async function queuePunchReportSync(options: {
   runInBackground(job.id, PUNCH_REPORT_SYNC_JOB, async () => {
     // Same completeness as shift-grid punch sync: pull the full period from BioTime
     // (not only known Hudoori emp codes), so punches before hiringDate are stored too.
-    const synced = await syncService.syncTransactions(
-      options.dateFrom,
-      options.dateTo,
-      job.id,
-    );
-    await syncService.recordTransactionRangeCoverage(
-      options.dateFrom,
-      options.dateTo,
-      options.locationId,
-    );
-    return synced > 0 ? `تمت مزامنة ${synced} بصمة` : 'لا توجد بصمات جديدة';
+    try {
+      const synced = await syncService.syncTransactions(
+        options.dateFrom,
+        options.dateTo,
+        job.id,
+      );
+      await syncService.recordTransactionRangeCoverage(
+        options.dateFrom,
+        options.dateTo,
+        options.locationId,
+      );
+      return synced > 0 ? `تمت مزامنة ${synced} بصمة` : 'لا توجد بصمات جديدة';
+    } catch (err) {
+      const { isBioTimeUnavailableError, BIOTIME_LOCAL_FALLBACK_MESSAGE } =
+        await import('./biotime/biotimeAvailability.service');
+      if (isBioTimeUnavailableError(err)) {
+        logger.warn({ err, jobId: job.id }, 'Punch-report sync skipped; using local punches');
+        return BIOTIME_LOCAL_FALLBACK_MESSAGE;
+      }
+      throw err;
+    }
   });
 
   return job.id;

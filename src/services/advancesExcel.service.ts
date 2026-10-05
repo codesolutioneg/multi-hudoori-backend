@@ -6,6 +6,7 @@ import { NotFoundError, AppError } from '../utils/errors';
 import { computeLongAdvanceAmounts } from './advances.service';
 import { tipsWorkingDaysByEmployeeIds } from './punchReportLine.service';
 import { calendarPeriodDays } from './payablePeriod.service';
+import { loadRankResolver } from './orgChart.service';
 
 async function workbookToBase64(workbook: ExcelJS.Workbook): Promise<string> {
   const buffer = await workbook.xlsx.writeBuffer();
@@ -117,7 +118,7 @@ export function importTemplateSpec(kind: ImportTemplateKind) {
   }
   return {
     kind,
-    sheetName: 'استيراد سلف',
+    sheetName: 'سلف',
     headersAr: LOAN_IMPORT_HEADERS_AR,
     headersEn: LOAN_IMPORT_HEADERS_EN,
     colCount: LOAN_IMPORT_HEADERS_AR.length,
@@ -228,6 +229,19 @@ export async function exportAdvancesImportTemplateXlsx(options?: {
       employees = employees.filter((e) =>
         jobTitles.includes(e.jobTitle.trim().toLowerCase()),
       );
+    }
+
+    if (kind === 'loan' && employees.length > 1) {
+      const rankOf = await loadRankResolver();
+      employees.sort((a, b) => {
+        const byRank = rankOf(a.jobTitle) - rankOf(b.jobTitle);
+        if (byRank !== 0) return byRank;
+        const byTitle = a.jobTitle.localeCompare(b.jobTitle, 'ar');
+        if (byTitle !== 0) return byTitle;
+        const byName = a.name.localeCompare(b.name, 'ar');
+        if (byName !== 0) return byName;
+        return a.code.localeCompare(b.code, 'ar');
+      });
     }
 
     if (employees.length === 0) {

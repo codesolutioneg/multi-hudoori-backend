@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { AppError, NotFoundError } from '../utils/errors';
 import { jsonRpcFail } from './jsonRpc';
 import { logger } from '../utils/logger';
+import { quotaErrorFromDb } from '../services/licenseQuota.service';
 
 /** Map the Prisma failures that represent ordinary business outcomes. */
 function fromPrisma(err: unknown): AppError | null {
@@ -49,7 +50,7 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
   const mapped =
     err instanceof AppError
       ? err
-      : (fromTenantError(err) ?? fromPrisma(err) ?? fromHttpError(err));
+      : (quotaErrorFromDb(err) ?? fromTenantError(err) ?? fromPrisma(err) ?? fromHttpError(err));
   if (mapped) {
     if (mapped.statusCode >= 500) {
       logger.error(

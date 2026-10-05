@@ -31,6 +31,11 @@ export function ungroupedLabelFor(grouping: GridGrouping): string {
 export type GroupableEmployee = {
   jobTitle?: string | null;
   department?: { name: string | null } | null;
+  name?: string | null;
+  code?: string | null;
+  identificationId?: string | null;
+  barcode?: string | null;
+  mapping?: { biotimeEmpCode?: string | null } | null;
 };
 
 /** The section an employee belongs to under the given grouping. */
@@ -42,11 +47,30 @@ export function groupKeyFor(emp: GroupableEmployee, grouping: GridGrouping): str
 }
 
 /**
- * Sorts so sections come out in a stable order with the ungrouped bucket last,
- * then by employee name inside each section. Grids get re-read constantly and a
- * row order that shifts between loads makes them unusable.
+ * Same code the grid / Excel show in the «كود» column — BioTime code first,
+ * then HR profile fallbacks.
  */
-export function compareForGrouping<T extends GroupableEmployee & { name?: string | null }>(
+export function employeeSortCode(emp: GroupableEmployee): string {
+  return (
+    emp.mapping?.biotimeEmpCode?.trim() ||
+    emp.identificationId?.trim() ||
+    emp.code?.trim() ||
+    emp.barcode?.trim() ||
+    ''
+  );
+}
+
+/** Numeric-aware code order (11019 before 11028; 8017 before 11006). */
+export function compareEmployeeCodes(a: string, b: string): number {
+  return a.localeCompare(b, 'en', { numeric: true });
+}
+
+/**
+ * Sorts so sections come out in a stable order with the ungrouped bucket last,
+ * then by employee code (ascending) inside each section. Name is only a
+ * tie-breaker. Used by both the on-screen grid and Excel export.
+ */
+export function compareForGrouping<T extends GroupableEmployee>(
   a: T,
   b: T,
   grouping: GridGrouping,
@@ -59,5 +83,7 @@ export function compareForGrouping<T extends GroupableEmployee & { name?: string
     if (kb === ungrouped) return -1;
     return ka.localeCompare(kb, 'ar');
   }
+  const codeCmp = compareEmployeeCodes(employeeSortCode(a), employeeSortCode(b));
+  if (codeCmp !== 0) return codeCmp;
   return (a.name ?? '').localeCompare(b.name ?? '', 'ar');
 }

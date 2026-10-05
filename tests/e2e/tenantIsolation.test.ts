@@ -143,6 +143,8 @@ describe('multi-tenant isolation', () => {
         {
           code: 'gamma',
           name: 'Gamma Inc',
+          maxEmployees: 50,
+          maxUsers: 5,
           hrManagerLogin: 'hr@gamma.test',
           hrManagerPassword: 'HrPass#2026',
           hrManagerName: 'Gamma HR',

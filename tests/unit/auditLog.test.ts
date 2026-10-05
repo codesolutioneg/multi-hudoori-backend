@@ -7,6 +7,7 @@ import {
   capDiffPreview,
   exportAuditLogXlsx,
   getAuditLog,
+  humanizeDiffRows,
   listAuditLogs,
   listFeatureGrants,
   setFeatureGrant,
@@ -15,7 +16,7 @@ import {
   writeAudit,
 } from '../../src/services/auditLog.service';
 import { getMenusForUser, getUserRoles } from '../../src/services/roles.service';
-import { createUser, ensureBioTimeConfig, resetDatabase } from '../helpers/db';
+import { createUser, createShift, ensureBioTimeConfig, resetDatabase } from '../helpers/db';
 
 describe('auditLog unit', () => {
   beforeAll(async () => {
@@ -28,14 +29,14 @@ describe('auditLog unit', () => {
 
   describe('capDiffPreview / shallowFieldDiffs', () => {
     it('caps preview length and truncates long strings', () => {
-      const rows = Array.from({ length: 60 }, (_, i) => ({
+      const rows = Array.from({ length: 220 }, (_, i) => ({
         entityId: `e${i}`,
         field: 'name',
         before: 'a'.repeat(600),
         after: `v${i}`,
       }));
       const capped = capDiffPreview(rows);
-      expect(capped).toHaveLength(50);
+      expect(capped).toHaveLength(200);
       expect(String(capped[0].before).endsWith('…')).toBe(true);
     });
 
@@ -86,6 +87,36 @@ describe('auditLog unit', () => {
       const file = await exportAuditLogXlsx(id!);
       expect(file.base64?.length ?? file.file?.toString().length).toBeGreaterThan(100);
       expect(String(file.filename)).toMatch(/audit_employees/);
+    });
+
+  it('humanizes employee and shift ids in diff rows', async () => {
+      const emp = await prisma.employeeProfile.create({
+        data: { name: 'موظف تدقيق', code: '99901', identificationId: '99901' },
+      });
+      const shift = await createShift({ name: 'صباحي', code: 'M1' });
+      const rows = await humanizeDiffRows([
+        {
+          entityId: emp.id,
+          entityLabel: emp.id,
+          field: 'shiftId',
+          before: shift.id,
+          after: null,
+        },
+        {
+          entityId: emp.id,
+          entityLabel: emp.id,
+          field: 'isOff',
+          before: false,
+          after: true,
+        },
+      ]);
+      expect(rows[0].entityLabel).toBe('موظف تدقيق (99901)');
+      expect(rows[0].beforeDisplay).toBe('M1 — صباحي');
+      expect(rows[0].afterDisplay).toBe('—');
+      expect(rows[0].fieldLabel).toBe('الشيفت');
+      expect(rows[1].fieldLabel).toBe('راحة');
+      expect(rows[1].beforeDisplay).toBe('لا');
+      expect(rows[1].afterDisplay).toBe('نعم');
     });
 
     it('does not throw when writeAudit fails soft-path (still returns null safely on bad actor only)', async () => {

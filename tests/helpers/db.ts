@@ -55,6 +55,9 @@ const TABLES = [
   'system_counters',
   'biotime_config',
   'odoo_config',
+  'sales_requests',
+  'company_features',
+  'subscription_plans',
   'companies',
 ] as const;
 

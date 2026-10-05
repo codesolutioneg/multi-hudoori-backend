@@ -84,6 +84,13 @@ router.post('/shift-grid/cell/update', requireAuth, requireHrOrBranchManager, as
     beforeSnap[key] = (existing as Record<string, unknown>)[key] ?? null;
     afterSnap[key] = (line as Record<string, unknown>)[key] ?? null;
   }
+  const employee = await prisma.employeeProfile.findUnique({
+    where: { id: existing.employeeId },
+    select: { name: true, code: true },
+  });
+  const employeeLabel = employee
+    ? `${employee.name}${employee.code ? ` (${employee.code})` : ''}`
+    : existing.employeeId;
   await writeAudit({
     req,
     module: 'shift_grid',
@@ -92,12 +99,14 @@ router.post('/shift-grid/cell/update', requireAuth, requireHrOrBranchManager, as
     entityId: existing.id,
     summary: `تعديل خلية جدول: ${grid.name || gridId}`,
     diffPreview: shallowFieldDiffs(beforeSnap, afterSnap, {
-      entityId: existing.id,
-      entityLabel: existing.employeeId,
+      entityId: existing.employeeId,
+      entityLabel: employeeLabel,
     }),
     payload: {
       gridId,
       employeeId: existing.employeeId,
+      employeeName: employee?.name ?? null,
+      employeeCode: employee?.code ?? null,
       date: existing.date instanceof Date ? existing.date.toISOString().slice(0, 10) : existing.date,
       before: beforeSnap,
       after: afterSnap,

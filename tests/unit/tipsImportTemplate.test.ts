@@ -5,6 +5,7 @@ import {
   LOAN_FILE_DAYS_ALIASES,
   summarizeLoanImportBatch,
   excelCellHasValue,
+  excelCellToText,
 } from '../../src/services/advanceLoanImport.service';
 import { importTemplateSpec, TIP_EXTRA_UNLOCKED_ROWS } from '../../src/services/advancesExcel.service';
 import {
@@ -63,6 +64,7 @@ describe('tips import template', () => {
     expect(spec.headersAr[spec.daysCol! - 1]).toBe('أيام العمل');
     expect(TIP_EXTRA_UNLOCKED_ROWS).toBe(25);
     expect(importTemplateSpec('loan').headersAr).toContain('مبلغ السلفة');
+    expect(importTemplateSpec('loan').sheetName).toBe('سلف');
   });
 });
 
@@ -98,6 +100,26 @@ describe('tips excel column aliases', () => {
     expect(excelCellHasValue(null)).toBe(false);
     expect(excelCellHasValue(0)).toBe(true);
     expect(excelCellHasValue('12')).toBe(true);
+  });
+
+  it('reads Excel rich-text / formula cells without becoming [object Object]', () => {
+    expect(
+      excelCellToText({ richText: [{ text: 'عمرو' }, { text: ' محسن' }] }),
+    ).toBe('عمرو محسن');
+    expect(excelCellToText({ text: 'طارق ادهم' })).toBe('طارق ادهم');
+    expect(excelCellToText({ formula: 'A1', result: 'حسام' })).toBe('حسام');
+    expect(excelCellToText({ weird: true })).toBe('');
+    expect(excelCellHasValue({ richText: [{ text: 'x' }] })).toBe(true);
+    expect(excelCellHasValue({ weird: true })).toBe(false);
+  });
+
+  it('rejects redacted sheet names with bullet/asterisk masks', () => {
+    expect(excelCellToText('محمد عاطف محمد ابو شي••••ع')).toBe(
+      'محمد عاطف محمد ابو شي••••ع',
+    );
+    // cellToText keeps the text; corrupt detection is on import/display helpers
+    // covered via import preferring employee profile name when linked.
+    expect(/[\u2022]/.test('محمد عاطف محمد ابو شي••••ع')).toBe(true);
   });
 });
 

@@ -113,13 +113,17 @@ export function isFawryPayment(line: LineWithEmployee): boolean {
   return payrollPaymentMethod(line) === 'فوري';
 }
 
-/** Odoo fawry_xlsx: employee work_phone only (stored on payroll line as related field). */
-function fawryWorkPhone(line: LineWithEmployee): string {
+/**
+ * Phone column for Fawry / Cash-Fawry Excel.
+ * Prefer workPhone (Odoo parity), then a stored Fawry number, then mobilePhone
+ * so Excel-imported phones still appear without a profile save.
+ */
+export function fawryWorkPhone(line: LineWithEmployee): string {
   const workPhone = line.employee?.workPhone?.trim() ?? '';
   if (workPhone) return workPhone;
   const fawryStored = line.employee?.fawryAccount?.trim() ?? '';
   if (fawryStored && /^\d{8,}$/.test(fawryStored.replace(/\D/g, ''))) return fawryStored;
-  return '';
+  return line.employee?.mobilePhone?.trim() ?? '';
 }
 
 /**

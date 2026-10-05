@@ -143,6 +143,8 @@ describe('deductions wizard multi-branch (e2e)', () => {
         '/api/biotime/deductions/confirm-branch-import',
         {
           date: '2026-08-20',
+          dateFrom,
+          dateTo,
           lines: lines.map((l) => ({
             employeeId: l.employeeId,
             type: l.type,
