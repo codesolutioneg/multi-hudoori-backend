@@ -177,6 +177,14 @@ describe('mobile location punch e2e', () => {
       ),
     );
     expect((out.transaction as { isCheckIn?: boolean }).isCheckIn).toBe(false);
+
+    const attendance = await prismaBase.attendance.findMany({
+      where: { companyId: seeded.company.id },
+    });
+    expect(attendance).toHaveLength(1);
+    expect(attendance[0].status).toBe('present');
+    expect(attendance[0].firstCheckIn).not.toBeNull();
+    expect(attendance[0].lastCheckOut).not.toBeNull();
   });
 
   it('lets HR enable location punch fields on locations/update', async () => {

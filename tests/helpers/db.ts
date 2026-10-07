@@ -4,6 +4,7 @@ import { prisma, prismaBase } from '../../src/prisma/client';
 import { runWithTenant, bumpTenantGeneration } from '../../src/tenant/context';
 import { ensureBioTimeConfigFromEnv } from '../../src/bootstrap/biotimeConfig';
 import { ensureOdooConfigFromEnv } from '../../src/bootstrap/odooConfig';
+import { ensureHomeMembership } from '../../src/services/companyMembership.service';
 
 /**
  * Tables truncated between E2E specs, children before parents.
@@ -55,7 +56,9 @@ const TABLES = [
   'system_counters',
   'biotime_config',
   'odoo_config',
+  'sales_request_activities',
   'sales_requests',
+  'user_company_memberships',
   'company_features',
   'subscription_plans',
   'companies',
@@ -161,6 +164,10 @@ export async function createUser(opts: {
     },
   });
 
+  if (companyId) {
+    await ensureHomeMembership(user);
+  }
+
   let employeeId: string | undefined;
   if (companyId && (opts.withEmployeeProfile || opts.employee)) {
     const profile = await prismaBase.employeeProfile.create({
@@ -235,4 +242,45 @@ export async function createLocation(overrides: Record<string, unknown> = {}) {
       data: { name: 'Main Branch', code: 'LOC-001', ...overrides, companyId } as never,
     }),
   );
+}
+
+/** Open shift grid covering a date range so leave/shift-change approve can fulfill. */
+export async function seedShiftGridForEmployee(opts: {
+  companyId: string;
+  employeeId: string;
+  dateFrom: string;
+  dateTo: string;
+  shiftId?: string;
+}) {
+  const grid = await prismaBase.shiftGrid.create({
+    data: {
+      companyId: opts.companyId,
+      name: 'Request cycle grid',
+      dateFrom: new Date(`${opts.dateFrom}T00:00:00.000Z`),
+      dateTo: new Date(`${opts.dateTo}T00:00:00.000Z`),
+      employeeIds: [opts.employeeId],
+    },
+  });
+  if (opts.shiftId) {
+    const from = new Date(`${opts.dateFrom}T00:00:00.000Z`);
+    const to = new Date(`${opts.dateTo}T00:00:00.000Z`);
+    const lines: {
+      companyId: string;
+      gridId: string;
+      employeeId: string;
+      date: Date;
+      shiftId: string;
+    }[] = [];
+    for (let d = from; d.getTime() <= to.getTime(); d = new Date(d.getTime() + 86400000)) {
+      lines.push({
+        companyId: opts.companyId,
+        gridId: grid.id,
+        employeeId: opts.employeeId,
+        date: new Date(d),
+        shiftId: opts.shiftId,
+      });
+    }
+    if (lines.length) await prismaBase.shiftGridLine.createMany({ data: lines });
+  }
+  return grid;
 }

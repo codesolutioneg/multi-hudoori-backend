@@ -4,6 +4,7 @@ import { User, UserRole } from '@prisma/client';
 import { prisma, prismaBase } from '../prisma/client';
 import { UnauthorizedError } from '../utils/errors';
 import { normalizeLoginInput } from '../utils/loginValidation';
+import { listMembershipsForUser } from './companyMembership.service';
 import { runWithTenant } from '../tenant/context';
 
 const TOKEN_EXPIRY_DAYS = 30;
@@ -131,14 +132,19 @@ export async function login(
       })
     : null;
 
+  const memberships =
+    user.role !== UserRole.PLATFORM_ADMIN ? await listMembershipsForUser(user.id) : [];
+
   return {
     token,
     expiry_date: expiryDate.toISOString().replace('T', ' ').slice(0, 19),
     user: userInfoJson(user),
     companyId,
+    activeCompanyId: companyId,
     company: company
       ? { id: company.id, code: company.code, name: company.name }
       : null,
+    memberships,
   };
 }
 

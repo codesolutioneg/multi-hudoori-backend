@@ -1,4 +1,9 @@
-import { SalesRequestStatus, SubscriptionPlanStatus } from '@prisma/client';
+import {
+  SalesRequestActivityKind,
+  SalesRequestSource,
+  SalesRequestStatus,
+  SubscriptionPlanStatus,
+} from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { prismaBase } from '../prisma/client';
 import { createCompany } from './company.service';
@@ -100,7 +105,47 @@ export async function createSalesRequest(input: CreateSalesRequestInput) {
 
   await assertCodeAvailableForRequest(companyCode);
 
-  return prismaBase.salesRequest.create({
+  return insertSalesRequest({
+    companyCode,
+    companyName,
+    contactName,
+    email: input.email.trim().toLowerCase(),
+    phone: input.phone.trim(),
+    requestedEmployees,
+    planId: input.planId?.trim() || null,
+    notes: input.notes?.trim() || null,
+    source: SalesRequestSource.LANDING,
+    landingNote: 'طلب من صفحة الهبوط',
+  });
+}
+
+const salesRequestInclude = {
+  plan: true,
+  createdCompany: { select: { id: true, code: true, name: true } },
+  ownerUser: { select: { id: true, name: true, login: true } },
+  activities: {
+    orderBy: { createdAt: 'desc' as const },
+    include: { actorUser: { select: { id: true, name: true, login: true } } },
+  },
+};
+
+async function insertSalesRequest(data: {
+  companyCode: string;
+  companyName: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  requestedEmployees: number;
+  planId: string | null;
+  notes: string | null;
+  source: SalesRequestSource;
+  ownerUserId?: string | null;
+  nextFollowUpAt?: Date | null;
+  landingNote?: string | null;
+  manualNote?: string | null;
+  actorUserId?: string | null;
+}) {
+  const row = await prismaBase.salesRequest.create({
     data: {
       companyCode,
       companyName,
@@ -108,26 +153,150 @@ export async function createSalesRequest(input: CreateSalesRequestInput) {
       email: input.email.trim().toLowerCase(),
       phone: input.phone.trim(),
       requestedEmployees,
-      planId: input.planId?.trim() || null,
-      notes: input.notes?.trim() || null,
+      planId: data.planId,
+      notes: data.notes,
+      source: data.source,
+      ownerUserId: data.ownerUserId ?? null,
+      nextFollowUpAt: data.nextFollowUpAt ?? null,
     },
-    include: { plan: true },
   });
+  if (data.landingNote) {
+    await logActivity({
+      salesRequestId: row.id,
+      kind: SalesRequestActivityKind.NOTE,
+      body: data.landingNote,
+      actorUserId: null,
+    });
+  }
+  if (data.manualNote) {
+    await logActivity({
+      salesRequestId: row.id,
+      kind: SalesRequestActivityKind.NOTE,
+      body: data.manualNote,
+      actorUserId: data.actorUserId ?? null,
+    });
+  }
+  return getSalesRequest(row.id);
 }
 
 export async function listSalesRequests(status?: SalesRequestStatus) {
-  return prismaBase.salesRequest.findMany({
+  const rows = await prismaBase.salesRequest.findMany({
     where: status ? { status } : undefined,
     orderBy: { createdAt: 'desc' },
-    include: { plan: true, createdCompany: { select: { id: true, code: true, name: true } } },
+    include: {
+      plan: true,
+      createdCompany: { select: { id: true, code: true, name: true } },
+      ownerUser: { select: { id: true, name: true, login: true } },
+    },
   });
+  return rows;
 }
 
 export async function getSalesRequest(id: string) {
   return prismaBase.salesRequest.findUnique({
     where: { id },
-    include: { plan: true, createdCompany: { select: { id: true, code: true, name: true } } },
+    include: salesRequestInclude,
   });
+}
+
+export async function getSalesRequestAnalytics() {
+  const [byStatus, byPlan, total] = await Promise.all([
+    prismaBase.salesRequest.groupBy({
+      by: ['status'],
+      _count: { _all: true },
+    }),
+    prismaBase.salesRequest.groupBy({
+      by: ['planId'],
+      _count: { _all: true },
+      where: { status: SalesRequestStatus.PENDING },
+    }),
+    prismaBase.salesRequest.count(),
+  ]);
+  const statusCounts = Object.fromEntries(
+    byStatus.map((r) => [r.status, r._count._all]),
+  ) as Record<string, number>;
+  const planCounts = byPlan.map((r) => ({ planId: r.planId, count: r._count._all }));
+  return { total, statusCounts, planCounts };
+}
+
+async function logActivity(input: {
+  salesRequestId: string;
+  kind: SalesRequestActivityKind;
+  body?: string | null;
+  fromStatus?: SalesRequestStatus | null;
+  toStatus?: SalesRequestStatus | null;
+  actorUserId?: string | null;
+}) {
+  await prismaBase.salesRequestActivity.create({
+    data: {
+      salesRequestId: input.salesRequestId,
+      kind: input.kind,
+      body: input.body?.trim() || null,
+      fromStatus: input.fromStatus ?? null,
+      toStatus: input.toStatus ?? null,
+      actorUserId: input.actorUserId ?? null,
+    },
+  });
+}
+
+export type CreateManualSalesRequestInput = CreateSalesRequestInput & {
+  ownerUserId?: string | null;
+  nextFollowUpAt?: string | Date | null;
+};
+
+export async function createManualSalesRequest(input: CreateManualSalesRequestInput, actorUserId: string) {
+  const companyCode = normalizeCompanyCode(input.companyCode);
+  const errCode = validateCompanyCode(companyCode);
+  if (errCode) throw Object.assign(new Error(errCode), { errorCode: 'VALIDATION_ERROR' });
+  const errEmail = validateEmail(input.email);
+  if (errEmail) throw Object.assign(new Error(errEmail), { errorCode: 'VALIDATION_ERROR' });
+  const errPhone = validatePhone(input.phone);
+  if (errPhone) throw Object.assign(new Error(errPhone), { errorCode: 'VALIDATION_ERROR' });
+  const companyName = input.companyName.trim();
+  const contactName = input.contactName.trim();
+  if (!companyName || !contactName) {
+    throw Object.assign(new Error('اسم الشركة واسم المسؤول مطلوبان'), { errorCode: 'VALIDATION_ERROR' });
+  }
+  const requestedEmployees = Number(input.requestedEmployees);
+  if (!Number.isInteger(requestedEmployees) || requestedEmployees < 1) {
+    throw Object.assign(new Error('عدد الموظفين يجب أن يكون عدداً صحيحاً أكبر من صفر'), {
+      errorCode: 'VALIDATION_ERROR',
+    });
+  }
+  if (input.planId) {
+    const plan = await getPlanById(input.planId);
+    if (!plan || plan.status !== SubscriptionPlanStatus.PUBLISHED) {
+      throw Object.assign(new Error('الباقة المختارة غير متاحة'), { errorCode: 'VALIDATION_ERROR' });
+    }
+  }
+  await assertCodeAvailableForRequest(companyCode);
+  return insertSalesRequest({
+    companyCode,
+    companyName,
+    contactName,
+    email: input.email.trim().toLowerCase(),
+    phone: input.phone.trim(),
+    requestedEmployees,
+    planId: input.planId?.trim() || null,
+    notes: input.notes?.trim() || null,
+    source: SalesRequestSource.MANUAL,
+    ownerUserId: input.ownerUserId?.trim() || actorUserId,
+    nextFollowUpAt: input.nextFollowUpAt ? new Date(input.nextFollowUpAt) : null,
+    manualNote: 'إنشاء يدوي من لوحة المنصة',
+    actorUserId,
+  });
+}
+
+export async function addSalesRequestNote(id: string, body: string, actorUserId: string) {
+  const row = await getSalesRequest(id);
+  if (!row) throw Object.assign(new Error('الطلب غير موجود'), { errorCode: 'NOT_FOUND' });
+  await logActivity({
+    salesRequestId: id,
+    kind: SalesRequestActivityKind.NOTE,
+    body,
+    actorUserId,
+  });
+  return getSalesRequest(id);
 }
 
 function randomPassword(): string {
@@ -151,7 +320,12 @@ export type UpdateSalesRequestInput = {
   notes?: string | null;
 };
 
-export async function updateSalesRequest(id: string, input: UpdateSalesRequestInput) {
+export type CrmPatchInput = UpdateSalesRequestInput & {
+  ownerUserId?: string | null;
+  nextFollowUpAt?: string | Date | null;
+};
+
+export async function updateSalesRequest(id: string, input: CrmPatchInput) {
   const row = await getSalesRequest(id);
   if (!row) throw Object.assign(new Error('الطلب غير موجود'), { errorCode: 'NOT_FOUND' });
   if (row.status !== SalesRequestStatus.PENDING) {
@@ -210,12 +384,18 @@ export async function updateSalesRequest(id: string, input: UpdateSalesRequestIn
   if (input.notes !== undefined) {
     data.notes = input.notes?.trim() || null;
   }
+  if (input.ownerUserId !== undefined) {
+    data.ownerUserId = input.ownerUserId?.trim() || null;
+  }
+  if (input.nextFollowUpAt !== undefined) {
+    data.nextFollowUpAt =
+      input.nextFollowUpAt == null || input.nextFollowUpAt === ''
+        ? null
+        : new Date(input.nextFollowUpAt);
+  }
 
-  return prismaBase.salesRequest.update({
-    where: { id },
-    data,
-    include: { plan: true, createdCompany: { select: { id: true, code: true, name: true } } },
-  });
+  await prismaBase.salesRequest.update({ where: { id }, data });
+  return getSalesRequest(id);
 }
 
 export async function approveSalesRequest(id: string, reviewerUserId: string) {
@@ -272,10 +452,17 @@ export async function approveSalesRequest(id: string, reviewerUserId: string) {
       reviewedAt: new Date(),
       reviewedByUserId: reviewerUserId,
     },
-    include: { plan: true, createdCompany: { select: { id: true, code: true, name: true } } },
+  });
+  await logActivity({
+    salesRequestId: id,
+    kind: SalesRequestActivityKind.STATUS_CHANGE,
+    fromStatus: SalesRequestStatus.PENDING,
+    toStatus: SalesRequestStatus.APPROVED,
+    actorUserId: reviewerUserId,
+    body: 'تمت الموافقة وإنشاء الشركة',
   });
 
-  return { request: updated, company, hrManager, mail };
+  return { request: await getSalesRequest(updated.id), company, hrManager, mail };
 }
 
 export async function rejectSalesRequest(id: string, reviewerUserId: string, reason?: string) {
@@ -284,7 +471,7 @@ export async function rejectSalesRequest(id: string, reviewerUserId: string, rea
   if (row.status !== SalesRequestStatus.PENDING) {
     throw Object.assign(new Error('الطلب ليس قيد المراجعة'), { errorCode: 'VALIDATION_ERROR' });
   }
-  return prismaBase.salesRequest.update({
+  await prismaBase.salesRequest.update({
     where: { id },
     data: {
       status: SalesRequestStatus.REJECTED,
@@ -292,6 +479,14 @@ export async function rejectSalesRequest(id: string, reviewerUserId: string, rea
       reviewedAt: new Date(),
       reviewedByUserId: reviewerUserId,
     },
-    include: { plan: true },
   });
+  await logActivity({
+    salesRequestId: id,
+    kind: SalesRequestActivityKind.STATUS_CHANGE,
+    fromStatus: SalesRequestStatus.PENDING,
+    toStatus: SalesRequestStatus.REJECTED,
+    actorUserId: reviewerUserId,
+    body: reason?.trim() || 'مرفوض',
+  });
+  return getSalesRequest(id);
 }

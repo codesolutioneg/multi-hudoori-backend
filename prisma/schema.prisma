@@ -101,10 +101,15 @@ model Company {
   subscriptionPlan   SubscriptionPlan? @relation("CompanySubscriptionPlan", fields: [subscriptionPlanId], references: [id], onDelete: SetNull)
   planNameAr         String? @map("plan_name_ar")
   planNameEn         String? @map("plan_name_en")
+  /// Optional parent for admin tree display only (no automatic access inheritance).
+  parentCompanyId    String? @map("parent_company_id")
+  parentCompany      Company?  @relation("CompanyParent", fields: [parentCompanyId], references: [id], onDelete: SetNull)
+  childCompanies     Company[] @relation("CompanyParent")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   companyFeatures            CompanyFeature[]
+  userCompanyMemberships     UserCompanyMembership[]
   users                      User[]
   userFeatureGrants          UserFeatureGrant[]
   auditLogs                  AuditLog[]
@@ -155,6 +160,7 @@ model Company {
   approvedSalesRequests      SalesRequest[]
 
   @@index([subscriptionPlanId])
+  @@index([parentCompanyId])
   @@map("companies")
 }
 
@@ -199,11 +205,31 @@ model User {
   featureGrants             UserFeatureGrant[]  @relation("FeatureGrantUser")
   featureGrantsGiven        UserFeatureGrant[]  @relation("FeatureGrantBy")
   company                   Company?            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  companyMemberships        UserCompanyMembership[]
+  ownedSalesRequests        SalesRequest[]      @relation("SalesRequestOwner")
+  salesRequestActivities    SalesRequestActivity[] @relation("SalesRequestActivityActor")
 
   @@unique([companyId, login])
   @@index([locationId])
   @@index([companyId])
   @@map("users")
+}
+
+/// Extra companies a user may switch to after login (home company remains User.companyId).
+model UserCompanyMembership {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  companyId String   @map("company_id")
+  role      UserRole
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([companyId])
+  @@map("user_company_memberships")
 }
 
 model UserFeatureGrant {
@@ -1626,6 +1652,16 @@ enum SalesRequestStatus {
   REJECTED
 }
 
+enum SalesRequestSource {
+  LANDING
+  MANUAL
+}
+
+enum SalesRequestActivityKind {
+  NOTE
+  STATUS_CHANGE
+}
+
 /// Landing pricing packages — edited from Super Admin; never hard-deleted (DRAFT keeps history).
 model SubscriptionPlan {
   id                   String                 @id @default(cuid())
@@ -1672,13 +1708,38 @@ model SalesRequest {
   createdCompany     Company?           @relation(fields: [createdCompanyId], references: [id], onDelete: SetNull)
   reviewedAt         DateTime?          @map("reviewed_at")
   reviewedByUserId   String?            @map("reviewed_by_user_id")
+  ownerUserId        String?            @map("owner_user_id")
+  ownerUser          User?              @relation("SalesRequestOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  nextFollowUpAt     DateTime?          @map("next_follow_up_at")
+  source             SalesRequestSource @default(LANDING)
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  activities SalesRequestActivity[]
 
   @@index([status, createdAt])
   @@index([companyCode])
   @@index([email])
+  @@index([ownerUserId])
+  @@index([nextFollowUpAt])
   @@map("sales_requests")
+}
+
+model SalesRequestActivity {
+  id              String                   @id @default(cuid())
+  salesRequestId  String                   @map("sales_request_id")
+  kind            SalesRequestActivityKind
+  body            String?
+  fromStatus      SalesRequestStatus?      @map("from_status")
+  toStatus        SalesRequestStatus?      @map("to_status")
+  actorUserId     String?                  @map("actor_user_id")
+  createdAt       DateTime                 @default(now()) @map("created_at")
+
+  salesRequest SalesRequest @relation(fields: [salesRequestId], references: [id], onDelete: Cascade)
+  actorUser    User?        @relation("SalesRequestActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([salesRequestId, createdAt])
+  @@map("sales_request_activities")
 }
 
 /// Public mobile app version catalog (used by external mobile clients).

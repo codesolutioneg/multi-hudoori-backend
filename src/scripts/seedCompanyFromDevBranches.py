@@ -57,7 +57,9 @@ def insert_batch(cfg: dict, table: str, cols: list[str], value_rows: list[list[s
     for i in range(0, len(value_rows), batch):
         chunk = value_rows[i : i + batch]
         values = ",\n".join("(" + ",".join(r) + ")" for r in chunk)
-        psql_stdin(cfg, f"INSERT INTO {table} ({col_sql}) VALUES {values} ON CONFLICT (id) DO NOTHING;")
+        # Any unique key (id, company_id+code, …) — not only PK — so re-seeds
+        # against companies that already have starter catalogs don't abort.
+        psql_stdin(cfg, f"INSERT INTO {table} ({col_sql}) VALUES {values} ON CONFLICT DO NOTHING;")
     print(f"  {table}: {len(value_rows)}")
     return len(value_rows)
 

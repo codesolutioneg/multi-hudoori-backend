@@ -79,11 +79,15 @@ router.post(
         );
         return;
       }
+      const parentRaw = p.parentCompanyId ?? p.parent_company_id;
+      const parentCompanyId =
+        parentRaw != null && String(parentRaw).trim() !== '' ? String(parentRaw).trim() : null;
       const result = await companyService.createCompany({
         code: String(p.code ?? ''),
         name: String(p.name ?? ''),
         maxEmployees,
         maxUsers,
+        parentCompanyId,
         hrManagerName: p.hrManagerName != null ? String(p.hrManagerName) : undefined,
         hrManagerLogin: p.hrManagerLogin != null ? String(p.hrManagerLogin) : undefined,
         hrManagerPassword: p.hrManagerPassword != null ? String(p.hrManagerPassword) : undefined,
@@ -126,11 +130,19 @@ router.post(
       return;
     }
     try {
+      const parentRaw = p.parentCompanyId ?? p.parent_company_id;
+      const parentCompanyId =
+        parentRaw !== undefined
+          ? parentRaw == null || String(parentRaw).trim() === ''
+            ? null
+            : String(parentRaw).trim()
+          : undefined;
       await companyService.updateCompany(id, {
         name: p.name != null ? String(p.name) : undefined,
         active: p.active != null ? Boolean(p.active) : undefined,
         maxEmployees,
         maxUsers,
+        parentCompanyId,
       });
       const company = await companyService.getCompany(id);
       jsonRpcSuccess(res, biotimeOk({ company }), req.rpcId);

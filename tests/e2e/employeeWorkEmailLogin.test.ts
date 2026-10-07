@@ -226,14 +226,21 @@ describe('employee workEmail login (WORK_STATE cases)', () => {
     const me = expectOk(await rpc('/api/biotime/me', {}, String(auth.token)));
     const menuIds = ((me.menus as Array<{ id: string }>) ?? []).map((m) => m.id);
     expect(menuIds).toEqual(
-      expect.arrayContaining(['dashboard', 'my_schedule', 'my_attendance', 'my_advance_request']),
+      expect.arrayContaining([
+        'dashboard',
+        'my_schedule',
+        'my_attendance',
+        'my_advance_request',
+        'my_requests',
+        'my_payroll',
+      ]),
     );
     expect(menuIds).not.toContain('employees');
     expect(menuIds).not.toContain('payroll');
     expect(menuIds).not.toContain('org_chart');
   });
 
-  it('blocks EMPLOYEE leave/salary request create (READ_ONLY) but allows advance-request eligibility', async () => {
+  it('blocks EMPLOYEE salary request create (READ_ONLY) but allows leave and advance-request eligibility', async () => {
     const { hr, location, companyId } = await seedHr();
     const emp = await prismaBase.employeeProfile.create({
       data: {
@@ -258,7 +265,7 @@ describe('employee workEmail login (WORK_STATE cases)', () => {
     const auth = expectOk(await loginEmployee('ro@co.test', 'Pass#2026'));
     const token = String(auth.token);
 
-    expectFail(
+    expectOk(
       await rpc(
         '/api/biotime/requests/leave/create',
         {
@@ -269,7 +276,6 @@ describe('employee workEmail login (WORK_STATE cases)', () => {
         },
         token,
       ),
-      'READ_ONLY',
     );
     expectFail(
       await rpc(
@@ -279,7 +285,7 @@ describe('employee workEmail login (WORK_STATE cases)', () => {
       ),
       'READ_ONLY',
     );
-    expectFail(await rpc('/api/biotime/payroll/my', {}, token), 'READ_ONLY');
+    expectOk(await rpc('/api/biotime/payroll/my', {}, token));
 
     // Advance request is the intentional exception (WORK_STATE 2026-09-08).
     expectOk(await rpc('/api/biotime/advance-requests/eligibility', {}, token));

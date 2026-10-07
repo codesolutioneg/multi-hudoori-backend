@@ -6,6 +6,12 @@ import { prisma } from '../prisma/client';
 import { prismaBase } from '../prisma/client';
 import { AppError, ForbiddenError, NotFoundError } from '../utils/errors';
 import { getCompanyId } from '../tenant/context';
+import { cairoDateOnly } from '../utils/payrollPeriod';
+import {
+  isCheckInState as punchIsCheckIn,
+  isCheckOutState as punchIsCheckOut,
+  roundHours,
+} from './shiftTime.service';
 
 export const MOBILE_GEO_TERMINAL_SN = 'MOBILE_GEO';
 export const PUNCH_SOURCE_MOBILE = 'mobile_geo';
@@ -48,8 +54,93 @@ export function isWithinGeofence(opts: {
 }
 
 function isCheckInState(state: string | null | undefined): boolean {
+  if (punchIsCheckIn(state)) return true;
   const s = String(state ?? '').toLowerCase();
-  return s === '0' || s === '2' || s === '4' || s === 'i' || s.includes('check_in') || s === 'in';
+  return s.includes('check_in') || s === 'in';
+}
+
+function isCheckOutState(state: string | null | undefined): boolean {
+  if (punchIsCheckOut(state)) return true;
+  const s = String(state ?? '').toLowerCase();
+  return s.includes('check_out') || s === 'out';
+}
+
+function cairoDayKey(d: Date): number {
+  return cairoDateOnly(d).getTime();
+}
+
+type PunchJson = {
+  id: string;
+  punchTime: string;
+  punchState: string | null;
+  isCheckIn: boolean;
+};
+
+function punchJson(row: { id: string; punchTime: Date; punchState: string | null }): PunchJson {
+  return {
+    id: row.id,
+    punchTime: row.punchTime.toISOString(),
+    punchState: row.punchState,
+    isCheckIn: isCheckInState(row.punchState),
+  };
+}
+
+/** Employee "حضوري" reads `attendances`, not raw punches — keep a day row in sync. */
+export async function upsertAttendanceFromMobilePunches(opts: {
+  companyId: string;
+  employeeId: string;
+  punchTime: Date;
+}) {
+  const workDate = cairoDateOnly(opts.punchTime);
+  const windowFrom = new Date(workDate.getTime() - 12 * 3600_000);
+  const windowTo = new Date(workDate.getTime() + 36 * 3600_000);
+
+  const punches = (
+    await prisma.transaction.findMany({
+      where: {
+        employeeId: opts.employeeId,
+        isDuplicate: false,
+        punchTime: { gte: windowFrom, lte: windowTo },
+      },
+      orderBy: { punchTime: 'asc' },
+    })
+  ).filter((t) => cairoDayKey(t.punchTime) === workDate.getTime());
+
+  const firstIn = punches.find((t) => isCheckInState(t.punchState)) ?? null;
+  const outs = punches.filter((t) => isCheckOutState(t.punchState));
+  const lastOut = outs.length ? outs[outs.length - 1] : null;
+
+  let workedHours = 0;
+  if (firstIn && lastOut && lastOut.punchTime > firstIn.punchTime) {
+    workedHours = roundHours((lastOut.punchTime.getTime() - firstIn.punchTime.getTime()) / 3600000);
+  }
+
+  const data = {
+    firstCheckIn: firstIn?.punchTime ?? null,
+    lastCheckOut: lastOut?.punchTime ?? null,
+    workedHours,
+    netWorkedHours: workedHours,
+    lateMinutes: 0,
+    earlyLeaveMinutes: 0,
+    overtimeHours: 0,
+    status: firstIn ? 'present' : 'absent',
+  };
+
+  const existing = await prisma.attendance.findUnique({
+    where: { employeeId_date: { employeeId: opts.employeeId, date: workDate } },
+  });
+  if (existing) {
+    await prisma.attendance.update({ where: { id: existing.id }, data });
+    return;
+  }
+  await prisma.attendance.create({
+    data: {
+      companyId: opts.companyId,
+      employeeId: opts.employeeId,
+      date: workDate,
+      ...data,
+    },
+  });
 }
 
 async function resolveEmployeeForUser(userId: string) {
@@ -77,12 +168,8 @@ export type MobilePunchContext = {
     longitude: number | null;
     geofenceRadiusMeters: number;
   } | null;
-  lastPunch: {
-    id: string;
-    punchTime: string;
-    punchState: string | null;
-    isCheckIn: boolean;
-  } | null;
+  lastPunch: PunchJson | null;
+  todayPunches: PunchJson[];
   nextAction: 'check_in' | 'check_out' | null;
 };
 
@@ -104,6 +191,7 @@ export async function getMobilePunchContext(userId: string): Promise<MobilePunch
       company,
       location: null,
       lastPunch: null,
+      todayPunches: [],
       nextAction: null,
     };
   }
@@ -124,6 +212,7 @@ export async function getMobilePunchContext(userId: string): Promise<MobilePunch
       company,
       location: locationPayload,
       lastPunch: null,
+      todayPunches: [],
       nextAction: null,
     };
   }
@@ -135,26 +224,28 @@ export async function getMobilePunchContext(userId: string): Promise<MobilePunch
       company,
       location: locationPayload,
       lastPunch: null,
+      todayPunches: [],
       nextAction: null,
     };
   }
 
-  const last = await prisma.transaction.findFirst({
+  const today = cairoDateOnly();
+  const windowFrom = new Date(today.getTime() - 12 * 3600_000);
+  const punches = await prisma.transaction.findMany({
     where: {
       employeeId: employee.id,
       isDuplicate: false,
+      punchTime: { gte: windowFrom },
     },
     orderBy: { punchTime: 'desc' },
   });
 
-  const lastPunch = last
-    ? {
-        id: last.id,
-        punchTime: last.punchTime.toISOString(),
-        punchState: last.punchState,
-        isCheckIn: isCheckInState(last.punchState),
-      }
-    : null;
+  const last = punches[0] ?? null;
+  const lastPunch = last ? punchJson(last) : null;
+  const todayPunches = punches
+    .filter((t) => cairoDayKey(t.punchTime) === today.getTime())
+    .map(punchJson)
+    .reverse();
 
   const nextAction: 'check_in' | 'check_out' =
     lastPunch && lastPunch.isCheckIn ? 'check_out' : 'check_in';
@@ -164,6 +255,7 @@ export async function getMobilePunchContext(userId: string): Promise<MobilePunch
     company,
     location: locationPayload,
     lastPunch,
+    todayPunches,
     nextAction,
   };
 }
@@ -234,6 +326,12 @@ export async function submitMobilePunch(opts: {
       longitude: opts.longitude,
       isDuplicate: false,
     },
+  });
+
+  await upsertAttendanceFromMobilePunches({
+    companyId,
+    employeeId: employee.id,
+    punchTime: row.punchTime,
   });
 
   return {

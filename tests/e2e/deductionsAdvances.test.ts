@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { AdvanceState, DeductionState, PayrollState, UserRole } from '@prisma/client';
-import { prisma } from '../../src/prisma/client';
+import { AdvanceState, DeductionState, PayrollState, RequestState, UserRole } from '@prisma/client';
+import { prisma, prismaBase } from '../../src/prisma/client';
 import { expectFail, expectOk, rpc } from '../helpers/api';
-import { createUser, ensureBioTimeConfig, resetDatabase, type SeededUser } from '../helpers/db';
+import {
+  createUser,
+  ensureBioTimeConfig,
+  resetDatabase,
+  seedShiftGridForEmployee,
+  type SeededUser,
+} from '../helpers/db';
 
 describe('deductions', () => {
   let hr: SeededUser;
@@ -500,36 +506,21 @@ describe('employee self-service requests', () => {
       role: UserRole.EMPLOYEE,
       withEmployeeProfile: true,
     });
+    await seedShiftGridForEmployee({
+      companyId: employee.companyId,
+      employeeId: employee.employeeId!,
+      dateFrom: '2026-06-01',
+      dateTo: '2026-07-31',
+    });
   });
 
-  const flows = [
+  const employeeFlows = [
     {
       name: 'leave',
       create: '/api/biotime/requests/leave/create',
       approve: '/api/biotime/requests/leave/approve',
       reject: '/api/biotime/requests/leave/reject',
       params: { leaveType: 'annual', dateFrom: '2026-07-01', dateTo: '2026-07-03', reason: 'holiday' },
-    },
-    {
-      name: 'loan',
-      create: '/api/biotime/requests/loan/create',
-      approve: '/api/biotime/requests/loan/approve',
-      reject: '/api/biotime/requests/loan/reject',
-      params: { amount: 5000, repaymentMonths: 6, reason: 'emergency' },
-    },
-    {
-      name: 'salary',
-      create: '/api/biotime/requests/salary/create',
-      approve: '/api/biotime/requests/salary/approve',
-      reject: '/api/biotime/requests/salary/reject',
-      params: { amount: 1000, reason: 'raise' },
-    },
-    {
-      name: 'certificate',
-      create: '/api/biotime/requests/certificate/create',
-      approve: '/api/biotime/requests/certificate/approve',
-      reject: '/api/biotime/requests/certificate/reject',
-      params: { certificateType: 'salary', reason: 'bank' },
     },
     {
       name: 'attendance-edit',
@@ -540,7 +531,25 @@ describe('employee self-service requests', () => {
     },
   ];
 
-  for (const flow of flows) {
+  const readOnlyEmployeeCreates = [
+    {
+      name: 'loan',
+      create: '/api/biotime/requests/loan/create',
+      params: { amount: 5000, repaymentMonths: 6, reason: 'emergency' },
+    },
+    {
+      name: 'salary',
+      create: '/api/biotime/requests/salary/create',
+      params: { amount: 1000, reason: 'raise' },
+    },
+    {
+      name: 'certificate',
+      create: '/api/biotime/requests/certificate/create',
+      params: { certificateType: 'salary', reason: 'bank' },
+    },
+  ];
+
+  for (const flow of employeeFlows) {
     describe(flow.name, () => {
       it('is created pending by the employee', async () => {
         const data = expectOk(await rpc(flow.create, flow.params, employee.token), flow.create);
@@ -574,6 +583,14 @@ describe('employee self-service requests', () => {
     });
   }
 
+  for (const flow of readOnlyEmployeeCreates) {
+    describe(flow.name, () => {
+      it('blocks employee create (READ_ONLY)', async () => {
+        expectFail(await rpc(flow.create, flow.params, employee.token), 'READ_ONLY');
+      });
+    });
+  }
+
   it('shows the employee their own requests only', async () => {
     const other = await createUser({
       login: 'other@test.local',
@@ -590,10 +607,20 @@ describe('employee self-service requests', () => {
   });
 
   it('counts every pending request type for HR', async () => {
-    for (const flow of flows) {
+    for (const flow of employeeFlows) {
       await rpc(flow.create, flow.params, employee.token);
     }
+    await prismaBase.loanRequest.create({
+      data: {
+        companyId: employee.companyId,
+        employeeId: employee.employeeId!,
+        amount: 5000,
+        repaymentMonths: 6,
+        reason: 'legacy',
+        state: RequestState.pending,
+      },
+    });
     const data = expectOk(await rpc('/api/biotime/requests/pending', {}, hr.token));
-    expect(data.count).toBe(flows.length);
+    expect(data.count).toBe(employeeFlows.length + 1);
   });
 });

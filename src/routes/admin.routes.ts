@@ -13,14 +13,17 @@ import {
   assertCanCreateEmployees,
   roleTakesSeat,
 } from '../services/licenseQuota.service';
+import { ensureHomeMembership } from '../services/companyMembership.service';
 import { randomBytes } from 'crypto';
 import companiesRoutes from './admin.companies.routes';
 import salesPlansRoutes from './admin.sales.routes';
+import membershipsRoutes from './admin.memberships.routes';
 
 const router = Router();
 
 router.use(companiesRoutes);
 router.use(salesPlansRoutes);
+router.use(membershipsRoutes);
 
 function params(req: { rpcParams?: Record<string, unknown> }) {
   return req.rpcParams ?? {};
@@ -108,6 +111,8 @@ router.post(
       },
       include: { location: true },
     });
+
+    await ensureHomeMembership(user);
 
     if (createsProfile) {
       await prisma.employeeProfile.create({

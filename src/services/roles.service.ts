@@ -82,6 +82,8 @@ export function getMenusForUser(
       { id: 'my_attendance', name: 'حضوري', icon: 'schedule', route: '/attendance/my' },
       // The one thing a branch employee may submit, not just read.
       { id: 'my_advance_request', name: 'طلب سلفة', icon: 'request_quote', route: '/my/advance-request' },
+      { id: 'my_requests', name: 'طلبات', icon: 'assignment', route: '/requests' },
+      { id: 'my_payroll', name: 'قسيمة راتبي', icon: 'payments', route: '/payroll/my' },
     );
     if (_options?.mobileLocationPunch) {
       menus.push({
@@ -122,6 +124,12 @@ export function getMenusForUser(
       // { id: 'shift_assignments', name: 'تعيين الشيفتات', icon: 'event_repeat', route: '/hr/shift-assignments' },
       { id: 'shift_grid', name: 'جدول الشيفتات', icon: 'grid_on', route: '/hr/shift-grid' },
       { id: 'attendance', name: 'الحضور', icon: 'fact_check', route: '/hr/attendance' },
+      {
+        id: 'hr_requests',
+        name: 'موافقة الطلبات',
+        icon: 'pending_actions',
+        route: '/requests',
+      },
       // { id: 'overtime', name: 'تحليل الإضافي', icon: 'access_time', route: '/hr/overtime' },
       { id: 'deductions', name: 'الاستقطاعات', icon: 'remove_circle_outline', route: '/hr/deductions' },
       // Branch requests waiting on HR live in a tab inside «السلف» — granting one

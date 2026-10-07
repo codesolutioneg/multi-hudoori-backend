@@ -1,5 +1,6 @@
 import { prismaBase } from '../prisma/client';
 import { hashPassword } from './auth.service';
+import { ensureHomeMembership } from './companyMembership.service';
 import { UserRole } from '@prisma/client';
 import { ensureBioTimeConfigFromEnv } from '../bootstrap/biotimeConfig';
 import { ensureOdooConfigFromEnv } from '../bootstrap/odooConfig';
@@ -31,17 +32,57 @@ const COMPANY_SELECT = {
   subscriptionPlanId: true,
   planNameAr: true,
   planNameEn: true,
+  parentCompanyId: true,
   createdAt: true,
   updatedAt: true,
 } as const;
+
+async function assertValidParentCompany(companyId: string | null, parentId: string | null): Promise<void> {
+  if (!parentId) return;
+  if (companyId && parentId === companyId) {
+    throw Object.assign(new Error('Company cannot be its own parent'), { errorCode: 'VALIDATION_ERROR' });
+  }
+  const parent = await prismaBase.company.findFirst({ where: { id: parentId, active: true } });
+  if (!parent) {
+    throw Object.assign(new Error('Parent company not found'), { errorCode: 'NOT_FOUND' });
+  }
+  if (!companyId) return;
+  let cursor: string | null = parentId;
+  for (let depth = 0; depth < 32 && cursor; depth++) {
+    const row = await prismaBase.company.findUnique({
+      where: { id: cursor },
+      select: { parentCompanyId: true },
+    });
+    if (!row?.parentCompanyId) break;
+    if (row.parentCompanyId === companyId) {
+      throw Object.assign(new Error('Parent would create a cycle in the company tree'), {
+        errorCode: 'VALIDATION_ERROR',
+      });
+    }
+    cursor = row.parentCompanyId;
+  }
+}
 
 export async function listCompanies() {
   const rows = await prismaBase.company.findMany({
     orderBy: { createdAt: 'desc' },
     select: { ...COMPANY_SELECT, _count: { select: { users: true, employees: true } } },
   });
+  const parentIds = [...new Set(rows.map((r) => r.parentCompanyId).filter(Boolean))] as string[];
+  const parents =
+    parentIds.length === 0
+      ? []
+      : await prismaBase.company.findMany({
+          where: { id: { in: parentIds } },
+          select: { id: true, code: true, name: true },
+        });
+  const parentById = new Map(parents.map((p) => [p.id, p]));
   return Promise.all(
-    rows.map(async (row) => ({ ...row, quota: await getQuotaSnapshot(row.id, prismaBase) })),
+    rows.map(async (row) => ({
+      ...row,
+      parentCompany: row.parentCompanyId ? parentById.get(row.parentCompanyId) ?? null : null,
+      quota: await getQuotaSnapshot(row.id, prismaBase),
+    })),
   );
 }
 
@@ -110,6 +151,7 @@ export type CreateCompanyInput = {
   name: string;
   maxEmployees: number | null;
   maxUsers: number | null;
+  parentCompanyId?: string | null;
   hrManagerName?: string;
   hrManagerLogin?: string;
   hrManagerPassword?: string;
@@ -135,6 +177,9 @@ export async function createCompany(input: CreateCompanyInput) {
     throw Object.assign(new Error('Company code already exists'), { errorCode: 'DUPLICATE' });
   }
 
+  const parentCompanyId = input.parentCompanyId?.trim() || null;
+  await assertValidParentCompany(null, parentCompanyId);
+
   const hrLoginRequested = Boolean((input.hrManagerLogin ?? '').trim() && input.hrManagerPassword);
   if (hrLoginRequested) {
     if (input.maxUsers === 0) {
@@ -157,6 +202,7 @@ export async function createCompany(input: CreateCompanyInput) {
       active: true,
       maxEmployees: input.maxEmployees,
       maxUsers: input.maxUsers,
+      parentCompanyId,
     },
   });
 
@@ -191,6 +237,7 @@ export async function createCompany(input: CreateCompanyInput) {
       },
     });
     hrManager = { id: user.id, login: user.login };
+    await ensureHomeMembership(user);
   }
 
   return { company, hrManager };
@@ -203,6 +250,7 @@ export async function updateCompany(
     active?: boolean;
     maxEmployees?: number | null;
     maxUsers?: number | null;
+    parentCompanyId?: string | null;
   },
 ) {
   const patch: {
@@ -210,11 +258,17 @@ export async function updateCompany(
     active?: boolean;
     maxEmployees?: number | null;
     maxUsers?: number | null;
+    parentCompanyId?: string | null;
   } = {};
   if (data.name != null) patch.name = data.name.trim();
   if (data.active != null) patch.active = data.active;
   // Lowering below current usage is allowed: it only blocks new rows, never deletes data.
   if (data.maxEmployees !== undefined) patch.maxEmployees = data.maxEmployees;
   if (data.maxUsers !== undefined) patch.maxUsers = data.maxUsers;
+  if (data.parentCompanyId !== undefined) {
+    const parentId = data.parentCompanyId?.trim() || null;
+    await assertValidParentCompany(id, parentId);
+    patch.parentCompanyId = parentId;
+  }
   return prismaBase.company.update({ where: { id }, data: patch, select: COMPANY_SELECT });
 }

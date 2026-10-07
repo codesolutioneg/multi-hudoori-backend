@@ -4,8 +4,11 @@ import { asyncHandler } from '../middlewares/asyncHandler';
 import { jsonRpcSuccess, biotimeOk, biotimeFail } from '../middlewares/jsonRpc';
 import { requireAuth, requirePlatformAdmin } from '../middlewares/auth';
 import {
+  addSalesRequestNote,
   approveSalesRequest,
+  createManualSalesRequest,
   getSalesRequest,
+  getSalesRequestAnalytics,
   listSalesRequests,
   rejectSalesRequest,
   updateSalesRequest,
@@ -39,8 +42,77 @@ router.post(
       statusRaw && Object.values(SalesRequestStatus).includes(statusRaw as SalesRequestStatus)
         ? (statusRaw as SalesRequestStatus)
         : undefined;
-    const rows = await listSalesRequests(status);
-    jsonRpcSuccess(res, biotimeOk({ requests: rows }), req.rpcId);
+    const q = String(params(req).q ?? params(req).search ?? '').trim();
+    let rows = await listSalesRequests(status);
+    if (q) {
+      const needle = q.toLowerCase();
+      rows = rows.filter(
+        (r) =>
+          r.companyCode.toLowerCase().includes(needle) ||
+          r.companyName.toLowerCase().includes(needle) ||
+          r.contactName.toLowerCase().includes(needle) ||
+          r.email.toLowerCase().includes(needle) ||
+          r.phone.includes(needle),
+      );
+    }
+    const analytics = await getSalesRequestAnalytics();
+    jsonRpcSuccess(res, biotimeOk({ requests: rows, analytics }), req.rpcId);
+  }),
+);
+
+router.post(
+  '/sales-requests/create',
+  requireAuth,
+  requirePlatformAdmin,
+  asyncHandler(async (req, res) => {
+    const p = params(req);
+    if (!req.user?.id) {
+      jsonRpcSuccess(res, biotimeFail('Unauthorized', 'ACCESS_DENIED'), req.rpcId);
+      return;
+    }
+    try {
+      const row = await createManualSalesRequest(
+        {
+          companyCode: String(p.companyCode ?? ''),
+          companyName: String(p.companyName ?? ''),
+          contactName: String(p.contactName ?? ''),
+          email: String(p.email ?? ''),
+          phone: String(p.phone ?? ''),
+          requestedEmployees: Number(p.requestedEmployees ?? 1),
+          planId: p.planId != null ? String(p.planId) : null,
+          notes: p.notes != null ? String(p.notes) : null,
+          ownerUserId: p.ownerUserId != null ? String(p.ownerUserId) : null,
+          nextFollowUpAt: p.nextFollowUpAt != null ? String(p.nextFollowUpAt) : null,
+        },
+        req.user.id,
+      );
+      jsonRpcSuccess(res, biotimeOk({ request: row }), req.rpcId);
+    } catch (err) {
+      const { message, code } = errPayload(err);
+      jsonRpcSuccess(res, biotimeFail(message, code), req.rpcId);
+    }
+  }),
+);
+
+router.post(
+  '/sales-requests/note',
+  requireAuth,
+  requirePlatformAdmin,
+  asyncHandler(async (req, res) => {
+    const p = params(req);
+    const id = String(p.id ?? '').trim();
+    const body = String(p.body ?? p.note ?? '').trim();
+    if (!id || !body || !req.user?.id) {
+      jsonRpcSuccess(res, biotimeFail('id and body are required', 'VALIDATION_ERROR'), req.rpcId);
+      return;
+    }
+    try {
+      const row = await addSalesRequestNote(id, body, req.user.id);
+      jsonRpcSuccess(res, biotimeOk({ request: row }), req.rpcId);
+    } catch (err) {
+      const { message, code } = errPayload(err);
+      jsonRpcSuccess(res, biotimeFail(message, code), req.rpcId);
+    }
   }),
 );
 
@@ -87,6 +159,13 @@ router.post(
             : undefined,
         planId: p.planId !== undefined ? (p.planId ? String(p.planId) : null) : undefined,
         notes: p.notes !== undefined ? String(p.notes ?? '') : undefined,
+        ownerUserId: p.ownerUserId !== undefined ? String(p.ownerUserId ?? '') : undefined,
+        nextFollowUpAt:
+          p.nextFollowUpAt !== undefined
+            ? p.nextFollowUpAt == null || p.nextFollowUpAt === ''
+              ? null
+              : String(p.nextFollowUpAt)
+            : undefined,
       });
       jsonRpcSuccess(res, biotimeOk({ request: row }), req.rpcId);
     } catch (err) {

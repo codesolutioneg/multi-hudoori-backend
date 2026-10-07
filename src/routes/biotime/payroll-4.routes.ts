@@ -148,14 +148,6 @@ router.post('/overtime/reject', requireAuth, requireHr, asyncHandler(async (req,
 }));
 
 router.post('/payroll/my', requireAuth, asyncHandler(async (req, res) => {
-  if (req.user!.role === UserRole.EMPLOYEE) {
-    jsonRpcSuccess(
-      res,
-      biotimeFail('حساب الموظف يعرض الحضور والجدول فقط', 'READ_ONLY'),
-      req.rpcId,
-    );
-    return;
-  }
   const records = await payrollService.myPayroll(req.user!.id);
   jsonRpcSuccess(res, biotimeOk({ records, count: records.length }), req.rpcId);
 }));

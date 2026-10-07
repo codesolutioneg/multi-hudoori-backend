@@ -6,6 +6,7 @@ import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 import { asyncHandler } from './asyncHandler';
 import { extractRequestToken } from '../utils/requestToken';
 import { enterTenant } from '../tenant/context';
+import { userHasMembership } from '../services/companyMembership.service';
 
 function extractActiveCompanyId(req: Request): string | null {
   const p = req.rpcParams ?? {};
@@ -53,16 +54,32 @@ export const requireAuth = asyncHandler(async (req: Request, _res: Response, nex
 
   const user = apiToken.user;
   const isPlatformAdmin = user.role === UserRole.PLATFORM_ADMIN;
-  const activeCompanyId = isPlatformAdmin
-    ? extractActiveCompanyId(req)
-    : user.companyId;
+  let activeCompanyId: string | null;
+  if (isPlatformAdmin) {
+    activeCompanyId = extractActiveCompanyId(req);
+  } else {
+    const requested = extractActiveCompanyId(req);
+    const homeCompanyId = user.companyId;
+    if (!homeCompanyId) {
+      throw new UnauthorizedError('User has no company', 'INVALID_TOKEN');
+    }
+    if (requested && requested !== homeCompanyId) {
+      const allowed = await userHasMembership(user.id, requested);
+      if (!allowed) {
+        throw new ForbiddenError('No access to selected company', 'ACCESS_DENIED');
+      }
+      activeCompanyId = requested;
+    } else {
+      activeCompanyId = homeCompanyId;
+    }
+  }
 
   if (!isPlatformAdmin && !user.companyId) {
     throw new UnauthorizedError('User has no company', 'INVALID_TOKEN');
   }
 
   // Super Admin may select a company; verify it exists and is active.
-  if (isPlatformAdmin && activeCompanyId) {
+  if (activeCompanyId) {
     const company = await prismaBase.company.findFirst({
       where: { id: activeCompanyId, active: true },
     });

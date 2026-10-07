@@ -282,7 +282,7 @@ describe('payroll lifecycle', () => {
       expect(data.count).toBe(0);
     });
 
-    it('blocks employee role from payroll/my (attendance/schedule only)', async () => {
+    it('employee payroll/my returns only their confirmed lines', async () => {
       const line = await prisma.payrollLine.findUniqueOrThrow({ where: { id: lineId } });
       const employeeUser = await createUser({ login: 'own@test.local', role: UserRole.EMPLOYEE });
       await prisma.employeeProfile.update({
@@ -291,7 +291,10 @@ describe('payroll lifecycle', () => {
       });
       await rpc('/api/biotime/payroll/confirm', { id: payrollId }, hr.token);
 
-      expectFail(await rpc('/api/biotime/payroll/my', {}, employeeUser.token), 'READ_ONLY');
+      const data = expectOk(await rpc('/api/biotime/payroll/my', {}, employeeUser.token));
+      const records = data.records as { line: { id: string } }[];
+      expect(records.length).toBe(1);
+      expect(records[0].line.id).toBe(line.id);
     });
   });
 

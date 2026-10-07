@@ -1,6 +1,17 @@
 import { RequestState } from '@prisma/client';
 import { prisma } from '../prisma/client';
-import { ForbiddenError } from '../utils/errors';
+import { AppError, ForbiddenError } from '../utils/errors';
+import {
+  assertDatesNotPeriodLocked,
+  enumerateUtcDates,
+  getOpenCycle,
+  type OpenCycle,
+} from './payrollCycleGuard.service';
+import {
+  fulfillApprovedAttendanceEditRequest,
+  fulfillApprovedLeaveRequest,
+  fulfillApprovedShiftChangeRequest,
+} from './requestFulfillment.service';
 
 async function employeeForUser(userId: string) {
   const profile = await prisma.employeeProfile.findFirst({ where: { userId } });
@@ -97,8 +108,11 @@ export async function createLeaveRequest(userId: string, data: {
   reason: string;
 }) {
   const employee = await employeeForUser(userId);
+  const dates = enumerateUtcDates(new Date(data.dateFrom), new Date(data.dateTo));
+  await assertDatesNotPeriodLocked(employee.id, dates);
   return prisma.leaveRequest.create({
     data: {
+      companyId: employee.companyId,
       employeeId: employee.id,
       leaveType: data.leaveType,
       dateFrom: new Date(data.dateFrom),
@@ -118,6 +132,7 @@ export async function createLoanRequest(userId: string, data: {
   const employee = await employeeForUser(userId);
   return prisma.loanRequest.create({
     data: {
+      companyId: employee.companyId,
       employeeId: employee.id,
       amount: data.amount,
       repaymentMonths: data.repaymentMonths,
@@ -136,8 +151,11 @@ export async function createShiftChangeRequest(userId: string, data: {
   reason: string;
 }) {
   const employee = await employeeForUser(userId);
+  const dates = enumerateUtcDates(new Date(data.dateFrom), new Date(data.dateTo));
+  await assertDatesNotPeriodLocked(employee.id, dates);
   return prisma.shiftChangeRequest.create({
     data: {
+      companyId: employee.companyId,
       employeeId: employee.id,
       newShiftId: data.newShiftId,
       currentShiftId: data.currentShiftId,
@@ -191,7 +209,13 @@ export function attendanceEditRequestJson(r: {
 export async function createSalaryRequest(userId: string, data: { amount: number; reason: string }) {
   const employee = await employeeForUser(userId);
   return prisma.salaryRequest.create({
-    data: { employeeId: employee.id, amount: data.amount, reason: data.reason, state: RequestState.pending },
+    data: {
+      companyId: employee.companyId,
+      employeeId: employee.id,
+      amount: data.amount,
+      reason: data.reason,
+      state: RequestState.pending,
+    },
     include: { employee: true },
   });
 }
@@ -199,7 +223,13 @@ export async function createSalaryRequest(userId: string, data: { amount: number
 export async function createCertificateRequest(userId: string, data: { certificateType: string; reason: string }) {
   const employee = await employeeForUser(userId);
   return prisma.certificateRequest.create({
-    data: { employeeId: employee.id, certificateType: data.certificateType, reason: data.reason, state: RequestState.pending },
+    data: {
+      companyId: employee.companyId,
+      employeeId: employee.id,
+      certificateType: data.certificateType,
+      reason: data.reason,
+      state: RequestState.pending,
+    },
     include: { employee: true },
   });
 }
@@ -208,8 +238,11 @@ export async function createAttendanceEditRequest(userId: string, data: {
   date: string; requestedCheckIn?: string; requestedCheckOut?: string; reason: string;
 }) {
   const employee = await employeeForUser(userId);
+  const day = new Date(data.date);
+  await assertDatesNotPeriodLocked(employee.id, [day]);
   return prisma.attendanceEditRequest.create({
     data: {
+      companyId: employee.companyId,
       employeeId: employee.id,
       date: new Date(data.date),
       requestedCheckIn: data.requestedCheckIn,
@@ -254,6 +287,13 @@ export async function rejectCertificateRequest(id: string, approverId: string, r
 }
 
 export async function approveAttendanceEditRequest(id: string, approverId: string) {
+  const existing = await prisma.attendanceEditRequest.findUnique({ where: { id } });
+  if (!existing) throw new AppError('Request not found', 404, 'NOT_FOUND');
+  if (existing.state !== RequestState.pending) {
+    throw new AppError('Request is not pending', 400, 'INVALID_STATE');
+  }
+  await assertDatesNotPeriodLocked(existing.employeeId, [existing.date]);
+  await fulfillApprovedAttendanceEditRequest(existing);
   return prisma.attendanceEditRequest.update({
     where: { id },
     data: { state: RequestState.approved, approvedById: approverId, rejectionReason: null },
@@ -267,6 +307,10 @@ export async function rejectAttendanceEditRequest(id: string, approverId: string
     data: { state: RequestState.rejected, approvedById: approverId, rejectionReason: reason },
     include: { employee: true },
   });
+}
+
+export async function openCyclePayload(): Promise<OpenCycle> {
+  return getOpenCycle();
 }
 
 export async function listMyRequests(userId: string) {
@@ -321,6 +365,14 @@ export async function listPendingRequests() {
 }
 
 export async function approveLeaveRequest(id: string, approverId: string) {
+  const existing = await prisma.leaveRequest.findUnique({ where: { id } });
+  if (!existing) throw new AppError('Request not found', 404, 'NOT_FOUND');
+  if (existing.state !== RequestState.pending) {
+    throw new AppError('Request is not pending', 400, 'INVALID_STATE');
+  }
+  const dates = enumerateUtcDates(existing.dateFrom, existing.dateTo);
+  await assertDatesNotPeriodLocked(existing.employeeId, dates);
+  await fulfillApprovedLeaveRequest(existing);
   return prisma.leaveRequest.update({
     where: { id },
     data: { state: RequestState.approved, approvedById: approverId, rejectionReason: null },
@@ -337,6 +389,14 @@ export async function approveLoanRequest(id: string, approverId: string) {
 }
 
 export async function approveShiftChangeRequest(id: string, approverId: string) {
+  const existing = await prisma.shiftChangeRequest.findUnique({ where: { id } });
+  if (!existing) throw new AppError('Request not found', 404, 'NOT_FOUND');
+  if (existing.state !== RequestState.pending) {
+    throw new AppError('Request is not pending', 400, 'INVALID_STATE');
+  }
+  const dates = enumerateUtcDates(existing.dateFrom, existing.dateTo);
+  await assertDatesNotPeriodLocked(existing.employeeId, dates);
+  await fulfillApprovedShiftChangeRequest(existing);
   return prisma.shiftChangeRequest.update({
     where: { id },
     data: { state: RequestState.approved, approvedById: approverId, rejectionReason: null },

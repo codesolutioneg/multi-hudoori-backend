@@ -24,11 +24,12 @@ import { prisma } from '../../prisma/client';
 import { prismaBase } from '../../prisma/client';
 import { cairoDateOnly } from '../../utils/payrollPeriod';
 import { getMobilePunchContext } from '../../services/mobileLocationPunch.service';
+import { getMembershipRole, listMembershipsForUser } from '../../services/companyMembership.service';
 
 const router = Router();
 
 router.post('/me', requireAuth, asyncHandler(async (req, res) => {
-  const user = await prisma.user.findUnique({
+  const user = await prismaBase.user.findUnique({
     where: { id: req.user!.id },
     include: {
       location: true,
@@ -103,13 +104,28 @@ router.post('/me', requireAuth, asyncHandler(async (req, res) => {
         config: configSummaryJson(config as never),
         apiVersion: '1.0.0-node-multi',
         company,
+        memberships: [],
       }), req.rpcId);
       return;
     }
     jsonRpcSuccess(res, biotimeFail('User not found', 'NOT_FOUND'), req.rpcId);
     return;
   }
-  const roles = getUserRoles(user, Boolean(user.employeeProfile));
+
+  const activeCompanyId = req.user?.activeCompanyId ?? user.companyId ?? null;
+  const memberships = await listMembershipsForUser(user.id);
+  let effectiveRole = user.role;
+  if (activeCompanyId && activeCompanyId !== user.companyId) {
+    const membershipRole = await getMembershipRole(user.id, activeCompanyId);
+    if (membershipRole) effectiveRole = membershipRole;
+  }
+  const roleUser = effectiveRole === user.role ? user : { ...user, role: effectiveRole };
+  const showEmployeeProfile =
+    Boolean(user.employeeProfile) &&
+    activeCompanyId != null &&
+    user.employeeProfile!.companyId === activeCompanyId;
+
+  const roles = getUserRoles(roleUser, showEmployeeProfile);
   const [auditLog, helpAssistant, employeeDelete, managedLocations] = await Promise.all([
     roles.isPlatformAdmin ? Promise.resolve(true) : userHasAuditGrant(user.id),
     roles.isPlatformAdmin ? Promise.resolve(true) : userHasAssistantGrant(user.id),
@@ -125,7 +141,7 @@ router.post('/me', requireAuth, asyncHandler(async (req, res) => {
       mobileLocationPunch = false;
     }
   }
-  const companyIdForEnt = user.companyId ?? req.user?.activeCompanyId ?? null;
+  const companyIdForEnt = activeCompanyId;
   const enabledFeatures =
     roles.isPlatformAdmin && !companyIdForEnt
       ? null
@@ -156,10 +172,9 @@ router.post('/me', requireAuth, asyncHandler(async (req, res) => {
     };
   }
 
-  const companyId = user.companyId ?? req.user?.activeCompanyId ?? null;
-  const company = companyId
+  const company = activeCompanyId
     ? await prismaBase.company.findUnique({
-        where: { id: companyId },
+        where: { id: activeCompanyId },
         select: { id: true, code: true, name: true },
       })
     : null;
@@ -170,15 +185,17 @@ router.post('/me', requireAuth, asyncHandler(async (req, res) => {
       name: user.name,
       email: user.email ?? user.login,
       login: user.login,
-      role: user.role,
+      role: effectiveRole,
       companyId: user.companyId ?? null,
-      activeCompanyId: req.user?.activeCompanyId ?? user.companyId ?? null,
+      activeCompanyId,
       locationId: user.locationId,
       locationName: user.location?.name ?? null,
       locationCode: user.location?.code ?? null,
     },
-    employee: user.employeeProfile ? employeeJson(user.employeeProfile, true) : {},
-    mapping: user.employeeProfile?.mapping ? {
+    employee: showEmployeeProfile && user.employeeProfile
+      ? employeeJson(user.employeeProfile, true)
+      : {},
+    mapping: showEmployeeProfile && user.employeeProfile?.mapping ? {
       biotimeEmpId: user.employeeProfile.mapping.biotimeEmpId,
       biotimeEmpCode: user.employeeProfile.mapping.biotimeEmpCode,
     } : {},
@@ -188,8 +205,9 @@ router.post('/me', requireAuth, asyncHandler(async (req, res) => {
         config: configSummaryJson(config as never),
         apiVersion: '1.0.0-node-multi',
         companyId: user.companyId ?? null,
-        activeCompanyId: req.user?.activeCompanyId ?? user.companyId ?? null,
+        activeCompanyId,
         company,
+        memberships,
       }), req.rpcId);
 }));
 

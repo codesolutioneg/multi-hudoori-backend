@@ -244,9 +244,6 @@ router.post('/payroll/payslip/detail', requireAuth, asyncHandler(async (req, res
     UserRole.PLATFORM_ADMIN,
   ];
   const isHr = hrRoles.includes(req.user!.role);
-  if (req.user!.role === UserRole.EMPLOYEE) {
-    throw new AppError('حساب الموظف يعرض الحضور والجدول فقط', 403, 'READ_ONLY');
-  }
   if (!isHr && profile?.id !== detail.employeeId) {
     throw new AppError('غير مصرح', 403, 'FORBIDDEN');
   }
@@ -266,9 +263,6 @@ router.post('/payroll/payslip/pdf', requireAuth, asyncHandler(async (req, res) =
     UserRole.PLATFORM_ADMIN,
   ];
   const isHr = hrRoles.includes(req.user!.role);
-  if (req.user!.role === UserRole.EMPLOYEE) {
-    throw new AppError('حساب الموظف يعرض الحضور والجدول فقط', 403, 'READ_ONLY');
-  }
   if (!isHr && profile?.id !== line.employeeId) {
     throw new AppError('غير مصرح', 403, 'FORBIDDEN');
   }

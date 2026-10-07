@@ -260,18 +260,28 @@ describe('Phases 3–6 (mocked BioTime — no outbound server calls)', () => {
     expect(pendingRes.body.result.data.count).toBeGreaterThan(0);
 
     const requestId = createRes.body.result.data.request.id;
+    const profile = await prisma.employeeProfile.findUniqueOrThrow({ where: { id: employeeProfileId } });
+    await prisma.shiftGrid.create({
+      data: {
+        companyId: profile.companyId,
+        name: 'July grid',
+        dateFrom: new Date('2026-07-01'),
+        dateTo: new Date('2026-07-31'),
+        employeeIds: [employeeProfileId],
+      },
+    });
     const approveRes = await rpc('/api/biotime/requests/leave/approve', { id: requestId }, hrToken);
     expect(approveRes.body.result.data.request.state).toBe('approved');
   });
 
-  it('Phase 6: loan request flow', async () => {
+  it('Phase 6: loan request create is READ_ONLY for employees', async () => {
     const createRes = await rpc('/api/biotime/requests/loan/create', {
       amount: 5000,
       repaymentMonths: 6,
       reason: 'Emergency',
     }, employeeToken);
-    expect(createRes.body.result.success).toBe(true);
-    expect(createRes.body.result.data.request.amount).toBe(5000);
+    expect(createRes.body.result.success).toBe(false);
+    expect(createRes.body.result.error_code).toBe('READ_ONLY');
   });
 
   it('dashboard stats includes pendingRequests from local DB', async () => {

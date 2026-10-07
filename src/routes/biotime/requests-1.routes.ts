@@ -20,25 +20,9 @@ function rejectEmployeeMutations(req: { user?: { role: UserRole } }, res: Parame
   return false;
 }
 
-function rejectEmployeeSelfServiceExtras(
-  req: { user?: { role: UserRole } },
-  res: Parameters<typeof jsonRpcSuccess>[0],
-  rpcId: unknown,
-): boolean {
-  if (req.user?.role === UserRole.EMPLOYEE) {
-    jsonRpcSuccess(
-      res,
-      biotimeFail('حساب الموظف يعرض الحضور والجدول فقط', 'READ_ONLY'),
-      rpcId as string | undefined,
-    );
-    return true;
-  }
-  return false;
-}
-
 router.post('/requests/my', requireAuth, asyncHandler(async (req, res) => {
-  if (rejectEmployeeSelfServiceExtras(req, res, req.rpcId)) return;
   const data = await requestsService.listMyRequests(req.user!.id);
+  const openCycle = await requestsService.openCyclePayload();
   jsonRpcSuccess(res, biotimeOk({
     leave: data.leave.map(requestsService.leaveRequestJson),
     loan: data.loan.map(requestsService.loanRequestJson),
@@ -46,11 +30,13 @@ router.post('/requests/my', requireAuth, asyncHandler(async (req, res) => {
     salary: data.salary.map(requestsService.salaryRequestJson),
     certificate: data.certificate.map(requestsService.certificateRequestJson),
     attendanceEdit: data.attendanceEdit.map(requestsService.attendanceEditRequestJson),
+    openCycle,
   }), req.rpcId);
 }));
 
 router.post('/requests/pending', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const data = await requestsService.listPendingRequests();
+  const openCycle = await requestsService.openCyclePayload();
   jsonRpcSuccess(res, biotimeOk({
     leave: data.leave.map(requestsService.leaveRequestJson),
     loan: data.loan.map(requestsService.loanRequestJson),
@@ -59,11 +45,11 @@ router.post('/requests/pending', requireAuth, requireHr, asyncHandler(async (req
     certificate: data.certificate.map(requestsService.certificateRequestJson),
     attendanceEdit: data.attendanceEdit.map(requestsService.attendanceEditRequestJson),
     count: data.count,
+    openCycle,
   }), req.rpcId);
 }));
 
 router.post('/requests/leave/create', requireAuth, asyncHandler(async (req, res) => {
-  if (rejectEmployeeMutations(req, res, req.rpcId)) return;
   const params = p(req);
   const r = await requestsService.createLeaveRequest(req.user!.id, {
     leaveType: String(params.leaveType ?? 'annual'),
@@ -86,7 +72,6 @@ router.post('/requests/loan/create', requireAuth, asyncHandler(async (req, res) 
 }));
 
 router.post('/requests/shift-change/create', requireAuth, asyncHandler(async (req, res) => {
-  if (rejectEmployeeMutations(req, res, req.rpcId)) return;
   const params = p(req);
   const r = await requestsService.createShiftChangeRequest(req.user!.id, {
     newShiftId: String(params.newShiftId),
@@ -155,7 +140,6 @@ router.post('/requests/certificate/create', requireAuth, asyncHandler(async (req
 }));
 
 router.post('/requests/attendance-edit/create', requireAuth, asyncHandler(async (req, res) => {
-  if (rejectEmployeeMutations(req, res, req.rpcId)) return;
   const params = p(req);
   const r = await requestsService.createAttendanceEditRequest(req.user!.id, {
     date: String(params.date),

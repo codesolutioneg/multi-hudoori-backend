@@ -313,7 +313,7 @@ describe('rest routes coverage (remaining)', () => {
   });
 
   describe('requests shift-change', () => {
-    it('blocks employee create (READ_ONLY); HR can reject/approve seeded requests', async () => {
+    it('employee can create; HR can reject/approve with grid coverage', async () => {
       const empUser = await createUser({
         login: 'emp@co.test',
         role: UserRole.EMPLOYEE,
@@ -340,7 +340,7 @@ describe('rest routes coverage (remaining)', () => {
       const aId = (shiftA.shift as { id: string }).id;
       const bId = (shiftB.shift as { id: string }).id;
 
-      expectFail(
+      expectOk(
         await rpc(
           '/api/biotime/requests/shift-change/create',
           {
@@ -352,8 +352,17 @@ describe('rest routes coverage (remaining)', () => {
           },
           empUser.token,
         ),
-        'READ_ONLY',
       );
+
+      await prismaBase.shiftGrid.create({
+        data: {
+          companyId,
+          name: 'Sep grid',
+          dateFrom: new Date('2026-09-01'),
+          dateTo: new Date('2026-09-30'),
+          employeeIds: [empUser.employeeId!],
+        },
+      });
 
       const rejectReq = await prismaBase.shiftChangeRequest.create({
         data: {
