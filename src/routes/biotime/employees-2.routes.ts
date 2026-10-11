@@ -11,7 +11,7 @@ import { ensureDefaultCustodyTypes, listEmployeeCustodies, syncEmployeeCustodies
 import { exportPunchReportFileResponse, exportSelectedGridPunchReportXlsx, exportShiftGridPunchReportXlsx, } from '../../services/punchReportExcel.service';
 import { getEmployeeLeaveSummary } from '../../services/employeeLeave.service';
 import { parseEmployeeDocumentType, readEmployeeDocument, readInsurancePrint, saveEmployeeDocument, saveInsurancePrint, } from '../../services/employeeDocuments.service';
-import { listAllBiotimeEmpCodes } from '../../services/biotimeEmpCodes.service';
+import { listAllEmpCodesForPunchReport } from '../../services/biotimeEmpCodes.service';
 import * as generateJobService from '../../services/generateJob.service';
 import { exportFileResponse } from '../../services/payrollExport.service';
 import { prisma } from '../../prisma/client';
@@ -105,7 +105,14 @@ router.post('/employees/punch-report-export/download', requireAuth, requireHr, a
   }
 
   const base64 = fs.readFileSync(filePath).toString('base64');
-  jsonRpcSuccess(res, biotimeOk(exportFileResponse(base64, filename)), req.rpcId);
+  const payload = exportFileResponse(base64, filename);
+  if (job.result?.usedLocal === true) {
+    Object.assign(payload, {
+      usedLocal: true,
+      fallbackMessage: job.result.fallbackMessage,
+    });
+  }
+  jsonRpcSuccess(res, biotimeOk(payload), req.rpcId);
 }));
 
 router.post('/employees/punch-report-export-xlsx', requireAuth, requireHr, asyncHandler(async (req, res) => {
@@ -122,18 +129,27 @@ router.post('/employees/punch-report-export-xlsx', requireAuth, requireHr, async
 
   if (includeAllBiotimeCodes) {
     try {
-      const empCodes = await listAllBiotimeEmpCodes();
-      if (!empCodes.length) {
-        jsonRpcSuccess(res, biotimeFail('لا توجد أكواد موظفين على خادم BioTime', 'NOT_FOUND'), req.rpcId);
+      const listed = await listAllEmpCodesForPunchReport();
+      if (!listed.codes.length) {
+        jsonRpcSuccess(res, biotimeFail('لا توجد أكواد بصمة مخزّنة للفترة المحددة', 'NOT_FOUND'), req.rpcId);
         return;
       }
       const file = await exportPunchReportFileResponse({
         dateFrom,
         dateTo,
-        empCodes,
+        empCodes: listed.codes,
         includeInactive: true,
       });
-      jsonRpcSuccess(res, biotimeOk(file), req.rpcId);
+      jsonRpcSuccess(
+        res,
+        biotimeOk({
+          ...file,
+          ...(listed.usedLocal
+            ? { usedLocal: true, fallbackMessage: listed.fallbackMessage }
+            : {}),
+        }),
+        req.rpcId,
+      );
     } catch (e: unknown) {
       jsonRpcSuccess(
         res,

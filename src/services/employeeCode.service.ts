@@ -1,9 +1,98 @@
 import { prisma } from '../prisma/client';
+import { deleteEmployee } from './employeeDelete.service';
 
 const CODE_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export function isValidEmployeeCode(code: string): boolean {
   return CODE_PATTERN.test(code);
+}
+
+export type EmployeeCodeConflict = {
+  id: string;
+  name: string | null;
+  code: string | null;
+  active: boolean;
+  archivedAt: Date | null;
+};
+
+function codeMatchWhere(code: string, excludeEmployeeId?: string) {
+  const normalized = code.trim();
+  return {
+    ...(excludeEmployeeId ? { id: { not: excludeEmployeeId } } : {}),
+    OR: [
+      { code: { equals: normalized, mode: 'insensitive' as const } },
+      { identificationId: { equals: normalized, mode: 'insensitive' as const } },
+      { barcode: { equals: normalized, mode: 'insensitive' as const } },
+      { mapping: { biotimeEmpCode: { equals: normalized, mode: 'insensitive' as const } } },
+    ],
+  };
+}
+
+export function isArchivedEmployeeConflict(row: EmployeeCodeConflict): boolean {
+  return !row.active || row.archivedAt != null;
+}
+
+/** Active (non-archived) holder of this fingerprint/employee code, if any. */
+export async function findActiveEmployeeCodeConflict(
+  code: string,
+  excludeEmployeeId?: string,
+): Promise<EmployeeCodeConflict | null> {
+  const normalized = code.trim();
+  if (!normalized) return null;
+  return prisma.employeeProfile.findFirst({
+    where: {
+      AND: [
+        codeMatchWhere(normalized, excludeEmployeeId),
+        { active: true, archivedAt: null },
+      ],
+    },
+    select: { id: true, name: true, code: true, active: true, archivedAt: true },
+  });
+}
+
+/** Archived holder of this code (for confirm-to-take flow). */
+export async function findArchivedEmployeeCodeConflict(
+  code: string,
+  excludeEmployeeId?: string,
+): Promise<EmployeeCodeConflict | null> {
+  const normalized = code.trim();
+  if (!normalized) return null;
+  return prisma.employeeProfile.findFirst({
+    where: {
+      AND: [
+        codeMatchWhere(normalized, excludeEmployeeId),
+        { OR: [{ active: false }, { archivedAt: { not: null } }] },
+      ],
+    },
+    select: { id: true, name: true, code: true, active: true, archivedAt: true },
+    orderBy: { archivedAt: 'desc' },
+  });
+}
+
+/** Permanently remove archived profiles that still hold this code so it can be reused. */
+export async function deleteArchivedEmployeesHoldingCode(
+  code: string,
+  excludeEmployeeId?: string,
+): Promise<{ deletedIds: string[]; deletedNames: string[] }> {
+  const normalized = code.trim();
+  if (!normalized) return { deletedIds: [], deletedNames: [] };
+  const rows = await prisma.employeeProfile.findMany({
+    where: {
+      AND: [
+        codeMatchWhere(normalized, excludeEmployeeId),
+        { OR: [{ active: false }, { archivedAt: { not: null } }] },
+      ],
+    },
+    select: { id: true, name: true },
+  });
+  const deletedIds: string[] = [];
+  const deletedNames: string[] = [];
+  for (const row of rows) {
+    await deleteEmployee(row.id);
+    deletedIds.push(row.id);
+    deletedNames.push(row.name || row.id);
+  }
+  return { deletedIds, deletedNames };
 }
 
 /** Next unique code: E1001, E1002, … (matches common BioTime emp_code style). */

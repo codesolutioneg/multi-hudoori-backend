@@ -17,6 +17,7 @@ import {
   type PayrollJournalMoveLine,
 } from './payrollJournalAmounts';
 import { sendPayrollJournalSummaryEmail } from '../mail.service';
+import { isLoanNotificationEmailEnabled } from '../notificationEmail.service';
 import {
   replaceOdooJournalAttachmentsWithHudooriExports,
   syncOdooHrEmployeesForPayroll,
@@ -156,7 +157,10 @@ export async function previewPayrollJournal(
   const cashFawry = computePayrollCashFawrySummary(payroll.lines);
   const branch = branchLabel(payroll);
   const label = debitLabel(branch);
-  const notificationEmails = branchNotificationEmails(payroll);
+  const notificationEmailsEnabled = await isLoanNotificationEmailEnabled();
+  const notificationEmails = notificationEmailsEnabled
+    ? branchNotificationEmails(payroll)
+    : [];
   return {
     payrollId: payroll.id,
     payrollName: payroll.name ?? '',
@@ -170,6 +174,7 @@ export async function previewPayrollJournal(
     amounts,
     cashFawry,
     notificationEmails,
+    notificationEmailsEnabled,
     lines: buildPayrollJournalMoveLines(amounts, label),
     debitLabel: label,
   };

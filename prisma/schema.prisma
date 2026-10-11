@@ -114,6 +114,7 @@ model Company {
   userFeatureGrants          UserFeatureGrant[]
   auditLogs                  AuditLog[]
   dashboardNotificationReads DashboardNotificationRead[]
+  appNotifications           AppNotification[]
   apiTokens                  ApiToken[]
   employees                  EmployeeProfile[]
   custodyTypes               CustodyType[]
@@ -195,10 +196,12 @@ model User {
   role                 UserRole  @default(EMPLOYEE)
   locationId           String?   @map("location_id")
   active               Boolean   @default(true)
+  fcmToken             String?   @map("fcm_token")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
   location                  Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  appNotifications          AppNotification[]
   employeeProfile           EmployeeProfile?
   apiTokens                 ApiToken[]
   hiringAppointmentsCreated HiringAppointment[] @relation("HiringAppointmentCreator")
@@ -281,6 +284,27 @@ model AuditLog {
   @@index([companyId])
   @@index([companyId, createdAt])
   @@map("audit_logs")
+}
+
+model AppNotification {
+  companyId String    @map("company_id")
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  type      String
+  title     String
+  body      String
+  imageUrl  String?   @map("image_url")
+  data      Json?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@index([companyId, createdAt])
+  @@index([companyId])
+  @@map("app_notifications")
 }
 
 model DashboardNotificationRead {
@@ -644,6 +668,8 @@ model BioTimeConfig {
   absentForgivenDaysCount      Int       @default(4) @map("absent_forgiven_days_count")
   /// Job title ids allowed on tips import templates.
   tipJobTitleIds               String[]  @default([]) @map("tip_job_title_ids")
+  /// Master switch for branch emails after sending advances or payrolls to Odoo.
+  loanNotificationEmailsEnabled Boolean @default(true) @map("loan_notification_emails_enabled")
   // Weekday the weekly schedule starts on, 0 = Sunday through 6 = Saturday.
   gridWeekStartDay             Int       @default(0) @map("grid_week_start_day")
   // Who an employee may see on the schedule: none, department, branch or all.

@@ -720,11 +720,17 @@ export async function confirmPayroll(payrollId: string) {
   // Lock Cash/Fawry classification so later archives don't move people between sheets.
   const { freezePayrollPaymentMethods } = await import('./payrollExport.service');
   await freezePayrollPaymentMethods(payrollId, { overwrite: true });
-  return prisma.payroll.update({
+  const payroll = await prisma.payroll.update({
     where: { id: payrollId },
     data: { state: PayrollState.confirmed },
     include: { lines: { include: { employee: true } } },
   });
+  const { notifyPayrollConfirmed } = await import('./appNotification.service');
+  const { logger } = await import('../utils/logger');
+  void notifyPayrollConfirmed(payrollId).catch((err) =>
+    logger.warn({ err, payrollId }, 'Payroll confirmed notification failed'),
+  );
+  return payroll;
 }
 
 export async function finalizePayroll(payrollId: string) {

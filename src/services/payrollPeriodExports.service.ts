@@ -13,6 +13,7 @@ import {
 import {
   computePayrollExcelSummary,
   exportCashFawryXlsx,
+  exportPayrollXlsx,
   isResignedLine,
   sanitizePayrollFilenamePart,
 } from './payrollExport.service';
@@ -505,6 +506,51 @@ export async function exportPeriodCashFawryZip(params: {
   return {
     base64: zipBuf.toString('base64'),
     filename: `payroll_cash_fawry_${fromStr}_${toStr}.zip`,
+    fileCount,
+  };
+}
+
+/** ZIP of main payroll workbooks (same as detail «تصدير Excel») — one file per payroll in the cycle. */
+export async function exportPeriodPayrollXlsxZip(params: {
+  dateFrom?: string | null;
+  dateTo?: string | null;
+}): Promise<{ base64: string; filename: string; fileCount: number }> {
+  const { from, to, fromStr, toStr } = requirePeriod(params.dateFrom, params.dateTo);
+  const payrolls = await prisma.payroll.findMany({
+    where: { dateFrom: from, dateTo: to },
+    include: { shiftGrid: { include: { location: true } }, _count: { select: { lines: true } } },
+    orderBy: [{ name: 'asc' }, { id: 'asc' }],
+  });
+  if (!payrolls.length) {
+    throw new AppError('لا توجد كشوف رواتب في هذه الدورة', 400, 'ACTION_ERROR');
+  }
+
+  const zip = new JSZip();
+  let fileCount = 0;
+  const usedNames = new Set<string>();
+
+  for (const p of payrolls) {
+    if (!p._count.lines) continue;
+    const { base64, filename } = await getSentSnapshotOrGenerate(p.id, 'payroll', () =>
+      exportPayrollXlsx(p.id),
+    );
+    let name = filename;
+    if (usedNames.has(name)) {
+      name = filename.replace(/\.xlsx$/i, `_${p.id.slice(-6)}.xlsx`);
+    }
+    usedNames.add(name);
+    zip.file(name, Buffer.from(base64, 'base64'));
+    fileCount += 1;
+  }
+
+  if (!fileCount) {
+    throw new AppError('لا توجد سطور رواتب في كشوف هذه الدورة', 400, 'ACTION_ERROR');
+  }
+
+  const zipBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  return {
+    base64: zipBuf.toString('base64'),
+    filename: `payroll_xlsx_${fromStr}_${toStr}.zip`,
     fileCount,
   };
 }

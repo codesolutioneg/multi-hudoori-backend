@@ -5,6 +5,7 @@ import { jsonRpcSuccess, biotimeOk, biotimeFail } from '../../middlewares/jsonRp
 import { requireAuth, requireHr } from '../../middlewares/auth';
 import { p } from './route-helpers';
 import * as requestsService from '../../services/requests.service';
+import * as requestNotify from '../../services/requestNotificationSideEffects';
 
 const router = Router();
 
@@ -86,36 +87,42 @@ router.post('/requests/shift-change/create', requireAuth, asyncHandler(async (re
 router.post('/requests/leave/approve', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const id = String(p(req).id ?? '');
   const r = await requestsService.approveLeaveRequest(id, req.user!.id);
+  requestNotify.notifyLeaveDecision(r, true);
   jsonRpcSuccess(res, biotimeOk({ request: requestsService.leaveRequestJson(r) }), req.rpcId);
 }));
 
 router.post('/requests/loan/approve', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const id = String(p(req).id ?? '');
   const r = await requestsService.approveLoanRequest(id, req.user!.id);
+  requestNotify.notifyLoanDecision(r, true);
   jsonRpcSuccess(res, biotimeOk({ request: requestsService.loanRequestJson(r) }), req.rpcId);
 }));
 
 router.post('/requests/shift-change/approve', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const id = String(p(req).id ?? '');
   const r = await requestsService.approveShiftChangeRequest(id, req.user!.id);
+  requestNotify.notifyShiftChangeDecision(r, true);
   jsonRpcSuccess(res, biotimeOk({ request: requestsService.shiftChangeRequestJson(r) }), req.rpcId);
 }));
 
 router.post('/requests/leave/reject', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const params = p(req);
   const r = await requestsService.rejectLeaveRequest(String(params.id), req.user!.id, String(params.reason ?? ''));
+  requestNotify.notifyLeaveDecision(r, false);
   jsonRpcSuccess(res, biotimeOk({ request: requestsService.leaveRequestJson(r) }), req.rpcId);
 }));
 
 router.post('/requests/loan/reject', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const params = p(req);
   const r = await requestsService.rejectLoanRequest(String(params.id), req.user!.id, String(params.reason ?? ''));
+  requestNotify.notifyLoanDecision(r, false);
   jsonRpcSuccess(res, biotimeOk({ request: requestsService.loanRequestJson(r) }), req.rpcId);
 }));
 
 router.post('/requests/shift-change/reject', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const params = p(req);
   const r = await requestsService.rejectShiftChangeRequest(String(params.id), req.user!.id, String(params.reason ?? ''));
+  requestNotify.notifyShiftChangeDecision(r, false);
   jsonRpcSuccess(res, biotimeOk({ request: requestsService.shiftChangeRequestJson(r) }), req.rpcId);
 }));
 
@@ -153,6 +160,7 @@ router.post('/requests/attendance-edit/create', requireAuth, asyncHandler(async 
 router.post('/requests/salary/approve', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const id = String(p(req).id ?? '');
   const r = await requestsService.approveSalaryRequest(id, req.user!.id);
+  requestNotify.notifySalaryDecision(r, true);
   jsonRpcSuccess(res, biotimeOk({ request: requestsService.salaryRequestJson(r) }), req.rpcId);
 }));
 

@@ -1287,8 +1287,8 @@ export async function importShiftGridXlsx(
     const left = await remainingEmployeeSeats(requireCompanyId());
     if (left != null && toCreate > left) {
       throw new AppError(
-        `الاستيراد يضيف ${toCreate} موظف جديد والمتبقي في اشتراك الشركة ${left} فقط. `
-          + 'لم يتم الاستيراد — قلّل الموظفين الجدد أو راجع مدير المنصة.',
+        `الاستيراد يضيف ${toCreate} موظف جديد والمتبقي في حصة الشركة/المجموعة ${left} فقط. `
+          + 'لم يتم الاستيراد — قلّل الموظفين الجدد أو راجع مدير المنصة (يشمل حد الشركة الرئيسية إن وُجد).',
         400,
         EMPLOYEE_QUOTA_EXCEEDED,
       );

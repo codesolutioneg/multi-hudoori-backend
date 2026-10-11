@@ -25,16 +25,54 @@ function andWhere(where: Record<string, unknown> | undefined, companyId: string)
   return { AND: [where, { companyId }] };
 }
 
+/**
+ * Inject active companyId into create payloads, including nested relation
+ * `create` / `createMany` (e.g. employeeProfile.mapping.create). Without this,
+ * BioTime sync nested writes fail with "Argument company is missing".
+ */
 function injectCreateData(
   data: Record<string, unknown> | Record<string, unknown>[] | undefined,
   companyId: string,
 ): Record<string, unknown> | Record<string, unknown>[] | undefined {
   if (!data) return data;
   if (Array.isArray(data)) {
-    return data.map((row) => (row.companyId !== undefined ? row : { ...row, companyId }));
+    return data.map(
+      (row) => injectCreateData(row, companyId) as Record<string, unknown>,
+    );
   }
-  if (data.companyId !== undefined) return data;
-  return { ...data, companyId };
+
+  const out: Record<string, unknown> = { ...data };
+  if (out.companyId === undefined && out.company === undefined) {
+    out.companyId = companyId;
+  }
+
+  for (const [key, value] of Object.entries(out)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const rel = value as Record<string, unknown>;
+    if (rel.create != null && typeof rel.create === 'object') {
+      out[key] = {
+        ...rel,
+        create: injectCreateData(
+          rel.create as Record<string, unknown> | Record<string, unknown>[],
+          companyId,
+        ),
+      };
+    }
+    if (rel.createMany != null && typeof rel.createMany === 'object') {
+      const cm = rel.createMany as { data?: Record<string, unknown> | Record<string, unknown>[] };
+      if (cm.data != null) {
+        out[key] = {
+          ...rel,
+          createMany: {
+            ...cm,
+            data: injectCreateData(cm.data, companyId),
+          },
+        };
+      }
+    }
+  }
+
+  return out;
 }
 
 function rowCompanyId(row: unknown): string | null | undefined {

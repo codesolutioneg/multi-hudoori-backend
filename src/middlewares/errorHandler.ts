@@ -44,13 +44,30 @@ function fromTenantError(err: unknown): AppError | null {
   return null;
 }
 
+/** Plain Error + errorCode (legacy throw sites) → friendly JSON-RPC. */
+function fromCodedError(err: unknown): AppError | null {
+  if (!err || typeof err !== 'object') return null;
+  if (err instanceof AppError) return null;
+  const code = (err as { errorCode?: unknown }).errorCode;
+  if (typeof code !== 'string' || !code.trim()) return null;
+  const message =
+    err instanceof Error && err.message.trim()
+      ? err.message
+      : code;
+  return new AppError(message, 400, code);
+}
+
 export function errorHandler(err: Error, req: Request, res: Response, _next: NextFunction): void {
   const id = req.rpcId;
 
   const mapped =
     err instanceof AppError
       ? err
-      : (quotaErrorFromDb(err) ?? fromTenantError(err) ?? fromPrisma(err) ?? fromHttpError(err));
+      : (quotaErrorFromDb(err) ??
+          fromTenantError(err) ??
+          fromCodedError(err) ??
+          fromPrisma(err) ??
+          fromHttpError(err));
   if (mapped) {
     if (mapped.statusCode >= 500) {
       logger.error(

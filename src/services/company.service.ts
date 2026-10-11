@@ -5,6 +5,12 @@ import { UserRole } from '@prisma/client';
 import { ensureBioTimeConfigFromEnv } from '../bootstrap/biotimeConfig';
 import { ensureOdooConfigFromEnv } from '../bootstrap/odooConfig';
 import { getQuotaSnapshot } from './licenseQuota.service';
+import {
+  assertChildQuotasWithinParent,
+  assertNewChildQuotasUnderParent,
+  assertParentQuotaCoversChildren,
+  getParentPoolSnapshot,
+} from './companyGroupQuota.service';
 
 function normalizeCompanyCode(raw: string): string {
   return raw.trim().toLowerCase();
@@ -78,18 +84,33 @@ export async function listCompanies() {
         });
   const parentById = new Map(parents.map((p) => [p.id, p]));
   return Promise.all(
-    rows.map(async (row) => ({
-      ...row,
-      parentCompany: row.parentCompanyId ? parentById.get(row.parentCompanyId) ?? null : null,
-      quota: await getQuotaSnapshot(row.id, prismaBase),
-    })),
+    rows.map(async (row) => {
+      const [quota, parentPool] = await Promise.all([
+        getQuotaSnapshot(row.id, prismaBase),
+        row.parentCompanyId
+          ? getParentPoolSnapshot(row.parentCompanyId, row.id)
+          : Promise.resolve(null),
+      ]);
+      return {
+        ...row,
+        parentCompany: row.parentCompanyId ? parentById.get(row.parentCompanyId) ?? null : null,
+        quota,
+        parentPool,
+      };
+    }),
   );
 }
 
 export async function getCompany(id: string) {
   const company = await prismaBase.company.findUnique({ where: { id }, select: COMPANY_SELECT });
   if (!company) return null;
-  return { ...company, quota: await getQuotaSnapshot(id, prismaBase) };
+  const [quota, parentPool] = await Promise.all([
+    getQuotaSnapshot(id, prismaBase),
+    company.parentCompanyId
+      ? getParentPoolSnapshot(company.parentCompanyId, company.id)
+      : Promise.resolve(null),
+  ]);
+  return { ...company, quota, parentPool };
 }
 
 type GroupCount = { id: string | null; name: string; count: number };
@@ -179,6 +200,13 @@ export async function createCompany(input: CreateCompanyInput) {
 
   const parentCompanyId = input.parentCompanyId?.trim() || null;
   await assertValidParentCompany(null, parentCompanyId);
+
+  if (parentCompanyId) {
+    await assertNewChildQuotasUnderParent(parentCompanyId, {
+      maxUsers: input.maxUsers,
+      maxEmployees: input.maxEmployees,
+    });
+  }
 
   const hrLoginRequested = Boolean((input.hrManagerLogin ?? '').trim() && input.hrManagerPassword);
   if (hrLoginRequested) {
@@ -270,5 +298,43 @@ export async function updateCompany(
     await assertValidParentCompany(id, parentId);
     patch.parentCompanyId = parentId;
   }
+
+  const nextParentId =
+    patch.parentCompanyId !== undefined
+      ? patch.parentCompanyId
+      : (
+          await prismaBase.company.findUnique({
+            where: { id },
+            select: { parentCompanyId: true },
+          })
+        )?.parentCompanyId ?? null;
+
+  if (nextParentId && (patch.maxUsers !== undefined || patch.maxEmployees !== undefined)) {
+    await assertChildQuotasWithinParent(id, {
+      maxUsers: patch.maxUsers,
+      maxEmployees: patch.maxEmployees,
+    });
+  } else if (nextParentId && data.parentCompanyId !== undefined && data.parentCompanyId) {
+    await assertChildQuotasWithinParent(id, {});
+  }
+
+  // If this company is a parent, lowering its caps must still cover children's allocations.
+  if (patch.maxUsers !== undefined || patch.maxEmployees !== undefined) {
+    const current = await prismaBase.company.findUnique({
+      where: { id },
+      select: { maxUsers: true, maxEmployees: true },
+    });
+    const childCount = await prismaBase.company.count({
+      where: { parentCompanyId: id, active: true },
+    });
+    if (childCount > 0 && current) {
+      await assertParentQuotaCoversChildren(
+        id,
+        patch.maxUsers !== undefined ? (patch.maxUsers ?? null) : current.maxUsers,
+        patch.maxEmployees !== undefined ? (patch.maxEmployees ?? null) : current.maxEmployees,
+      );
+    }
+  }
+
   return prismaBase.company.update({ where: { id }, data: patch, select: COMPANY_SELECT });
 }

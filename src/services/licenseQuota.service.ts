@@ -52,7 +52,7 @@ type Db = Pick<PrismaClient, 'company' | 'employeeProfile' | 'user'>;
 
 async function defaultDb(): Promise<Db> {
   // Lazy: prisma/client imports the tenant extension, which imports this module.
-  const { prismaBase } = await import('../prisma/client');
+  const { prismaBase } = await import('../prisma/client.js');
   return prismaBase;
 }
 
@@ -84,9 +84,31 @@ export async function getQuotaSnapshot(companyId: string, db?: Db): Promise<Quot
   };
 }
 
-/** Remaining employee seats, or null when unlimited. */
+/**
+ * Remaining employee seats for creates/imports.
+ * Null only when both the company and its group root are unlimited.
+ * For a child company, returns min(company remaining, parent-group remaining).
+ */
 export async function remainingEmployeeSeats(companyId: string, db?: Db): Promise<number | null> {
-  return (await getQuotaSnapshot(companyId, db)).employeesRemaining;
+  const local = (await getQuotaSnapshot(companyId, db)).employeesRemaining;
+  const {
+    getGroupRootCompanyId,
+    listGroupCompanyIds,
+    countGroupEmployees,
+  } = await import('./companyGroupQuota.service.js');
+  const rootId = await getGroupRootCompanyId(companyId);
+  const { prismaBase } = await import('../prisma/client.js');
+  const root = await prismaBase.company.findUnique({
+    where: { id: rootId },
+    select: { maxEmployees: true },
+  });
+  if (!root || root.maxEmployees == null) return local;
+
+  const groupIds = await listGroupCompanyIds(rootId);
+  const used = await countGroupEmployees(groupIds);
+  const groupLeft = Math.max(0, root.maxEmployees - used);
+  if (local == null) return groupLeft;
+  return Math.min(local, groupLeft);
 }
 
 export async function assertCanCreateEmployees(
@@ -99,6 +121,8 @@ export async function assertCanCreateEmployees(
   if (s.employeesMax != null && s.employeesUsed + addCount > s.employeesMax) {
     throw new QuotaExceededError('employees', s.employeesUsed, s.employeesMax);
   }
+  const { assertGroupCanAddEmployees } = await import('./companyGroupQuota.service.js');
+  await assertGroupCanAddEmployees(companyId, addCount);
 }
 
 export async function assertCanCreateDashboardUsers(
@@ -111,6 +135,8 @@ export async function assertCanCreateDashboardUsers(
   if (s.usersMax != null && s.usersUsed + addCount > s.usersMax) {
     throw new QuotaExceededError('users', s.usersUsed, s.usersMax);
   }
+  const { assertGroupCanAddDashboardUsers } = await import('./companyGroupQuota.service.js');
+  await assertGroupCanAddDashboardUsers(companyId, addCount);
 }
 
 const DB_QUOTA_RE = /(EMPLOYEE|USER)_QUOTA_EXCEEDED:(\d+):(\d+)/;

@@ -1,5 +1,6 @@
 import { User, UserRole } from '@prisma/client';
 import { prismaBase } from '../prisma/client';
+import { assertMembershipTargetAllowed } from './companyGroupQuota.service';
 
 export type MembershipSummary = {
   companyId: string;
@@ -72,6 +73,7 @@ export async function addMembership(input: {
   if (!company) {
     throw Object.assign(new Error('Company not found'), { errorCode: 'NOT_FOUND' });
   }
+  await assertMembershipTargetAllowed(user.companyId, company.id);
   const role = input.role ?? user.role;
   await prismaBase.userCompanyMembership.upsert({
     where: { userId_companyId: { userId: user.id, companyId: company.id } },

@@ -54,6 +54,130 @@ router.post('/shift-grid/list', requireAuth, requireHrOrBranchManager, asyncHand
   );
 }));
 
+router.post('/shift-grid/search-employee', requireAuth, requireHrOrBranchManager, asyncHandler(async (req, res) => {
+  const params = p(req);
+  const query = String(params.query ?? params.q ?? '').trim();
+  if (query.length < 2) {
+    jsonRpcSuccess(res, biotimeFail('اكتب كود الموظف أو حرفين على الأقل من الاسم', 'VALIDATION'), req.rpcId);
+    return;
+  }
+
+  const employees = await prisma.employeeProfile.findMany({
+    where: {
+      OR: [
+        { code: { equals: query, mode: 'insensitive' } },
+        { identificationId: { equals: query, mode: 'insensitive' } },
+        { barcode: { equals: query, mode: 'insensitive' } },
+        { mapping: { biotimeEmpCode: { equals: query, mode: 'insensitive' } } },
+        { name: { contains: query, mode: 'insensitive' } },
+      ],
+    },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      active: true,
+      archivedAt: true,
+      workLocation: { select: { name: true, actualName: true } },
+    },
+    orderBy: [{ active: 'desc' }, { name: 'asc' }],
+    take: 20,
+  });
+  if (!employees.length) {
+    jsonRpcSuccess(res, biotimeOk({ employees: [] }), req.rpcId);
+    return;
+  }
+
+  const employeeIds = employees.map((e) => e.id);
+  const locationScope = await getHrLocationScope(req.user!.id, req.user!.role);
+  const lineGroups = await prisma.shiftGridLine.groupBy({
+    by: ['gridId', 'employeeId'],
+    where: { employeeId: { in: employeeIds } },
+    _count: { _all: true },
+  });
+  const gridsWithIds = await prisma.shiftGrid.findMany({
+    where: { employeeIds: { hasSome: employeeIds } },
+    select: { id: true, employeeIds: true },
+  });
+
+  const gridIdsByEmp = new Map<string, Map<string, number>>();
+  const addGrid = (employeeId: string, gridId: string, lines: number) => {
+    const perEmp = gridIdsByEmp.get(employeeId) ?? new Map<string, number>();
+    perEmp.set(gridId, Math.max(perEmp.get(gridId) ?? 0, lines));
+    gridIdsByEmp.set(employeeId, perEmp);
+  };
+  for (const row of lineGroups) addGrid(row.employeeId, row.gridId, row._count._all);
+  for (const g of gridsWithIds) {
+    for (const employeeId of g.employeeIds) {
+      if (employeeIds.includes(employeeId)) addGrid(employeeId, g.id, 0);
+    }
+  }
+
+  const allGridIds = [...new Set([...gridIdsByEmp.values()].flatMap((m) => [...m.keys()]))];
+  const grids = await prisma.shiftGrid.findMany({
+    where: {
+      id: { in: allGridIds },
+      ...(locationScope ? { locationId: locationScope } : {}),
+    },
+    select: {
+      id: true,
+      name: true,
+      dateFrom: true,
+      dateTo: true,
+      state: true,
+      mergedFromGridIds: true,
+      mergedIntoGridId: true,
+      location: { select: { name: true, actualName: true } },
+    },
+  });
+  const gridById = new Map(grids.map((g) => [g.id, g]));
+  const parentIds = [...new Set(grids.map((g) => g.mergedIntoGridId).filter((id): id is string => !!id))];
+  const parents = parentIds.length
+    ? await prisma.shiftGrid.findMany({
+        where: { id: { in: parentIds } },
+        select: { id: true, name: true, location: { select: { name: true } } },
+      })
+    : [];
+  const parentById = new Map(parents.map((g) => [g.id, g]));
+  const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+
+  const result = employees.map((e) => {
+    const perEmp = gridIdsByEmp.get(e.id) ?? new Map<string, number>();
+    const items = [...perEmp.entries()]
+      .map(([gridId, lineCount]) => {
+        const g = gridById.get(gridId);
+        if (!g) return null;
+        const parent = g.mergedIntoGridId ? parentById.get(g.mergedIntoGridId) : null;
+        return {
+          id: g.id,
+          name: g.name,
+          locationName: g.location?.name ?? '',
+          dateFrom: dayKey(g.dateFrom),
+          dateTo: dayKey(g.dateTo),
+          state: g.state,
+          isMerged: g.mergedFromGridIds.length > 0,
+          mergedIntoGridId: g.mergedIntoGridId,
+          mergedIntoName: parent
+            ? `${parent.name}${parent.location?.name ? ` — ${parent.location.name}` : ''}`
+            : null,
+          lineCount,
+        };
+      })
+      .filter((g): g is NonNullable<typeof g> => g != null)
+      .sort((a, b) => (a.dateFrom === b.dateFrom ? a.name.localeCompare(b.name) : b.dateFrom.localeCompare(a.dateFrom)));
+    return {
+      id: e.id,
+      code: e.code ?? '',
+      name: e.name ?? '',
+      active: e.active && !e.archivedAt,
+      locationName: e.workLocation?.name ?? '',
+      grids: items,
+    };
+  });
+
+  jsonRpcSuccess(res, biotimeOk({ employees: result }), req.rpcId);
+}));
+
 router.post('/shift-grid/get', requireAuth, requireHrOrBranchManager, asyncHandler(async (req, res) => {
   const params = p(req);
   const id = String(params.id ?? params.gridId ?? '');

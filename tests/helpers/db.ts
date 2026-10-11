@@ -46,6 +46,7 @@ const TABLES = [
   'devices',
   'insurance_companies',
   'dashboard_notification_reads',
+  'app_notifications',
   'audit_logs',
   'user_feature_grants',
   'api_tokens',

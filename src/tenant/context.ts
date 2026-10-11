@@ -27,7 +27,7 @@ export function runWithTenant<T>(store: TenantStore, fn: () => T): T {
   return als.run({ ...store, generation: tenantGeneration }, fn);
 }
 
-/** Bind tenant for the rest of this Express request (survives async next()). */
+/** Legacy: prefer `runWithTenant` inside `asyncHandler` (enterWith drops after await). */
 export function enterTenant(store: TenantStore): void {
   als.enterWith({ ...store, generation: tenantGeneration });
 }

@@ -72,6 +72,78 @@ export function computeLongAdvanceAmounts(
   };
 }
 
+/** Last payroll for a departed/archived employee settles the leftover balance. */
+export function isDepartedForAdvanceSettlement(emp: {
+  active: boolean;
+  departureDate?: Date | null;
+}): boolean {
+  return !emp.active || Boolean(emp.departureDate);
+}
+
+/** One instalment while employed; remaining balance in full once archived. */
+export function longAdvanceDeductionAmount(
+  amounts: LongAdvanceAmounts,
+  settleRemaining: boolean,
+): number {
+  if (amounts.remainingAmount <= 0.01) return 0;
+  if (settleRemaining) return amounts.remainingAmount;
+  return round2(Math.min(amounts.installmentAmount, amounts.remainingAmount));
+}
+
+export type LongAdvanceWarningSummary = {
+  count: number;
+  remainingAmount: number;
+  remainingInstallments: number;
+};
+
+export type LongAdvanceWarningWithEmployee = LongAdvanceWarningSummary & {
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+};
+
+/** Long advances with unpaid balance (excludes cancelled only). */
+export async function getOutstandingLongAdvanceWarning(
+  employeeId: string,
+): Promise<LongAdvanceWarningSummary | null> {
+  const advances = await prisma.advanceLong.findMany({
+    where: {
+      employeeId,
+      state: { not: AdvanceState.cancelled },
+    },
+    include: { payments: true },
+  });
+  let count = 0;
+  let remainingAmount = 0;
+  let remainingInstallments = 0;
+  for (const adv of advances) {
+    const amounts = computeLongAdvanceAmounts(adv);
+    if (amounts.remainingAmount <= 0.01) continue;
+    count += 1;
+    remainingAmount = round2(remainingAmount + amounts.remainingAmount);
+    remainingInstallments += amounts.remainingInstallments;
+  }
+  if (count === 0) return null;
+  return { count, remainingAmount, remainingInstallments };
+}
+
+export async function getOutstandingLongAdvanceWarningWithEmployee(
+  employeeId: string,
+): Promise<LongAdvanceWarningWithEmployee | null> {
+  const summary = await getOutstandingLongAdvanceWarning(employeeId);
+  if (!summary) return null;
+  const emp = await prisma.employeeProfile.findUnique({
+    where: { id: employeeId },
+    select: { id: true, name: true, code: true },
+  });
+  return {
+    ...summary,
+    employeeId,
+    employeeName: emp?.name ?? '',
+    employeeCode: emp?.code ?? '',
+  };
+}
+
 /** Editable while no instalment sits on a confirmed payroll sheet. */
 export function longAdvanceCanEdit(advance: {
   state: AdvanceState;
@@ -312,6 +384,14 @@ export async function applyLongAdvancesForLine(
   payroll: Payroll,
   line: PayrollLine,
 ): Promise<number> {
+  const employee = await prisma.employeeProfile.findUnique({
+    where: { id: line.employeeId },
+    select: { active: true, departureDate: true },
+  });
+  const settleRemaining = employee
+    ? isDepartedForAdvanceSettlement(employee)
+    : false;
+
   const longs = await prisma.advanceLong.findMany({
     where: {
       employeeId: line.employeeId,
@@ -335,11 +415,10 @@ export async function applyLongAdvancesForLine(
       continue;
     }
 
-    const { remainingAmount, installmentAmount } =
-      computeLongAdvanceAmounts(adv);
-    if (remainingAmount <= 0.01) continue;
-    const amt = round2(Math.min(installmentAmount, remainingAmount));
+    const amounts = computeLongAdvanceAmounts(adv);
+    const amt = longAdvanceDeductionAmount(amounts, settleRemaining);
     if (amt <= 0) continue;
+    const remainingAmount = amounts.remainingAmount;
 
     await prisma.advanceLongPayment.create({
       data: {
@@ -402,6 +481,14 @@ export async function linkLongAdvancesOnly(
   let updated = 0;
 
   for (const line of lines) {
+    const employee = await prisma.employeeProfile.findUnique({
+      where: { id: line.employeeId },
+      select: { active: true, departureDate: true },
+    });
+    const settleRemaining = employee
+      ? isDepartedForAdvanceSettlement(employee)
+      : false;
+
     const longs = await prisma.advanceLong.findMany({
       where: {
         employeeId: line.employeeId,
@@ -412,18 +499,17 @@ export async function linkLongAdvancesOnly(
     });
 
     for (const adv of longs) {
-      const { remainingAmount } = computeLongAdvanceAmounts(adv);
-      if (remainingAmount <= 0.01) continue;
+      const amounts = computeLongAdvanceAmounts(adv);
+      if (amounts.remainingAmount <= 0.01) continue;
 
       const exists = await prisma.advanceLongPayment.findFirst({
         where: { advanceId: adv.id, payrollId },
       });
       if (exists) continue;
 
-      const amt = round2(
-        Math.min(adv.installmentAmount || remainingAmount, remainingAmount),
-      );
+      const amt = longAdvanceDeductionAmount(amounts, settleRemaining);
       if (amt <= 0) continue;
+      const remainingAmount = amounts.remainingAmount;
 
       await prisma.advanceLongPayment.create({
         data: {

@@ -4,7 +4,7 @@
 import ExcelJS from 'exceljs';
 import type { EmployeeProfile, PayrollLine } from '@prisma/client';
 import { prisma } from '../prisma/client';
-import { NotFoundError } from '../utils/errors';
+import { AppError, NotFoundError } from '../utils/errors';
 
 type LineWithEmployee = PayrollLine & {
   employee?: (EmployeeProfile & {
@@ -525,19 +525,34 @@ export function getPayslipValues(
   };
 }
 
-export function writePayslipsSheet(workbook: ExcelJS.Workbook, payroll: PayrollWithLines) {
+export function writePayslipsSheet(
+  workbook: ExcelJS.Workbook,
+  payroll: PayrollWithLines,
+  options?: {
+    linkPayrollSheet?: boolean;
+    reuseSheet?: boolean;
+    breakAfterLast?: boolean;
+  },
+) {
   // Odoo sheet name: Payslip — A4, one employee per printed page.
-  const sheet = workbook.addWorksheet('Payslip');
-  sheet.views = [{ rightToLeft: true }];
-  sheet.pageSetup = {
-    paperSize: 9,
-    orientation: 'portrait',
-    fitToPage: true,
-    fitToWidth: 1,
-    fitToHeight: 0,
-    horizontalCentered: true,
-    margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
-  };
+  const existing = options?.reuseSheet ? workbook.getWorksheet('Payslip') : undefined;
+  const sheet = existing ?? workbook.addWorksheet('Payslip');
+  if (!existing) {
+    sheet.views = [{ rightToLeft: true }];
+    sheet.pageSetup = {
+      paperSize: 9,
+      orientation: 'portrait',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      horizontalCentered: true,
+      margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
+    };
+    sheet.getColumn(1).width = 11;
+    sheet.getColumn(2).width = 26;
+    sheet.getColumn(3).width = 11;
+    sheet.getColumn(4).width = 26;
+  }
 
   const hdrBlue: Partial<ExcelJS.Style> = {
     font: { bold: true, size: 10, color: { argb: 'FFFFFFFF' } },
@@ -683,15 +698,93 @@ export function writePayslipsSheet(workbook: ExcelJS.Workbook, payroll: PayrollW
       border: { top: { style: 'medium' }, left: { style: 'medium' }, bottom: { style: 'medium' }, right: { style: 'medium' } },
     });
     sheet.getCell(row, 2).value = 'إجمالي الراتب';
-    if (i < sorted.length - 1) {
+    if (i < sorted.length - 1 || options?.breakAfterLast) {
       sheet.getRow(row).addPageBreak();
     }
     row += 3;
   }
 
-  if (!sorted.length) {
+  if (!sorted.length && !existing) {
     sheet.getCell(1, 1).value = 'لا توجد سطور رواتب';
   }
+}
+
+const MAX_SELECTED_PAYSLIPS = 80;
+
+export async function exportSelectedPayslipsXlsx(params: {
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  selections?: { payrollId?: string; employeeId?: string }[] | null;
+}): Promise<{ base64: string; filename: string; count: number }> {
+  const fromStr = String(params.dateFrom ?? '').slice(0, 10);
+  const toStr = String(params.dateTo ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStr) || !/^\d{4}-\d{2}-\d{2}$/.test(toStr)) {
+    throw new AppError('حدد تاريخ البداية والنهاية للدورة', 400, 'VALIDATION_ERROR');
+  }
+  const raw = Array.isArray(params.selections) ? params.selections : [];
+  const seen = new Set<string>();
+  const selections: { payrollId: string; employeeId: string }[] = [];
+  for (const row of raw) {
+    const payrollId = String(row?.payrollId ?? '').trim();
+    const employeeId = String(row?.employeeId ?? '').trim();
+    if (!payrollId || !employeeId) continue;
+    const key = `${payrollId}:${employeeId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selections.push({ payrollId, employeeId });
+  }
+  if (!selections.length) {
+    throw new AppError('اختر موظفاً واحداً على الأقل', 400, 'VALIDATION_ERROR');
+  }
+  if (selections.length > MAX_SELECTED_PAYSLIPS) {
+    throw new AppError(
+      `الحد الأقصى ${MAX_SELECTED_PAYSLIPS} قسيمة في الملف`,
+      400,
+      'VALIDATION_ERROR',
+    );
+  }
+
+  const byPayroll = new Map<string, Set<string>>();
+  for (const s of selections) {
+    const set = byPayroll.get(s.payrollId) ?? new Set<string>();
+    set.add(s.employeeId);
+    byPayroll.set(s.payrollId, set);
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  let written = 0;
+  let batchIndex = 0;
+  const payrollIds = [...byPayroll.keys()];
+  for (const payrollId of payrollIds) {
+    const full = await loadPayrollForExport(payrollId);
+    const pFrom = full.dateFrom.toISOString().slice(0, 10);
+    const pTo = full.dateTo.toISOString().slice(0, 10);
+    if (pFrom !== fromStr || pTo !== toStr) {
+      throw new AppError('الكشف ليس ضمن الدورة المحددة', 400, 'VALIDATION_ERROR');
+    }
+    const want = byPayroll.get(payrollId)!;
+    const lines = full.lines.filter((l) => want.has(l.employeeId));
+    if (!lines.length) continue;
+    writePayslipsSheet(
+      workbook,
+      { ...full, lines },
+      {
+        reuseSheet: batchIndex > 0,
+        breakAfterLast: batchIndex < payrollIds.length - 1,
+      },
+    );
+    written += lines.length;
+    batchIndex += 1;
+  }
+  if (!written) {
+    throw new AppError('لا توجد قسائم للموظفين المحددين في هذه الدورة', 400, 'ACTION_ERROR');
+  }
+
+  return {
+    base64: await workbookToBase64(workbook),
+    filename: `Payslips_selected_${fromStr}_${toStr}.xlsx`,
+    count: written,
+  };
 }
 
 /** Payslip-only workbook — same cells as the Payslip tab on تصدير Excel. */

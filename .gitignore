@@ -7,6 +7,7 @@ storage/
 files_to_check/
 .env
 .env.*
+**/odc-chat-firebase-adminsdk*.json
 *.log
 coverage/
 tests/load/.fixture.json
@@ -14,3 +15,7 @@ test-artifacts/
 # Local review working notes, never published
 .jez/
 .cursor/
+
+uploads/
+**/__pycache__/
+*.pyc

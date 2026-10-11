@@ -12,7 +12,24 @@
 
 ## Daily log
 
+### 2026-10-11
+- **Auto**: Migrate prod → `vicanza`: dump `biotime_2026-10-11_1156` → `biotime_mig_vicanza`؛ سكربت `migrateProdDumpToCompany.py --wipe`؛ 1351 emp / 15 users / 109k punches / 204 grids + configs؛ إصلاح dynamic import `companyGroupQuota.service.js` (BioTime sync). **MULTI**.
+- **Auto**: Child hire paths — `PARENT_QUOTA_EXCEEDED` كـ `AppError` + `fromCodedError` في errorHandler؛ `remainingEmployeeSeats` = min(حصة الشركة، حصة المجموعة) قبل Excel/shift-grid import؛ رسائل أوضح. **MULTI**.
+- **Auto**: Parent employee pool — مجموع حدود موظفي الفروع ≤ حد الرئيسية؛ منع «بلا حد» تحت رئيسية محدودة؛ رفض تخفيض حد الرئيسية تحت مجموع الفروع؛ `parentPool` في قائمة الشركات؛ اختبارات `companyGroupQuota` 5/5؛ deploy. **MULTI**.
+- **Auto**: Deploy Multi — طبّق `loan_notification_emails_enabled` عبر `MIGRATE_DATABASE_URL` + `migrate resolve`؛ esbuild `dist/routes/biotime/index.js` + PM2 restart `hudoori-multi-backend`؛ `/api/health` و quota OK. **MULTI**.
+- **Auto**: Port hodouri prod/dev HR parity إلى Multi: `loanNotificationEmailsEnabled` + Odoo JSON-RPC 300s؛ archive-preview + تحذير سلف طويلة + تسوية مؤرشف على مسير؛ Payslip دورة + ZIP payroll-xlsx؛ Option A home = `locationId` البطاقة؛ `CODE_ARCHIVED_CONFLICT` + bulk unarchive + `shift-grid/search-employee`. Migration `20261011120000_loan_notification_emails_enabled` (طبّقها مالك DB إن فشل migrate). **MULTI**.
+- **Auto**: إصلاح BioTime sync create — `injectCreateData` يحقن `companyId` داخل nested `mapping.create` (كان يفشل Argument company is missing على levi). **MULTI**.
+- **Auto**: levi BioTime probe (read-only) على `91.99.195.177:8089` — 2 dept / 229 emp / 2 devices؛ punches ~26840 من 2026-01-21 → 2026-10-11 (بدون فلتر تاريخ API ترجع آخر يوم تقريباً). **MULTI**.
+- **Auto**: levi BioTime — إصلاح port محفوظ `8090` → `8089` على `91.99.195.177`؛ JWT testConnection ناجح (`is_connected=true`). **MULTI**.
+
 ### 2026-10-07
+- **Auto**: `employeeListJson.userId` لقائمة الموظفين (إرسال FCM لأفراد). **MULTI**.
+- **Auto**: إصلاح `COMPANY_CONTEXT_REQUIRED` لمدير HR — `asyncHandler` يلف الطلب بـ `runWithTenant`؛ إعادة build `dist/routes/biotime/index.js` + symlinks `dist/routes/{tenant,prisma}`؛ `scripts/build-biotime-routes.mjs`. **MULTI**.
+- **Auto**: FCM HR — `POST /notifications/send` (أفراد) + `admin-list`؛ `employeeJson.userId` للوحة الإرسال. **MULTI**.
+- **Auto**: FCM (odc-chat) — `User.fcmToken`, `app_notifications`, Firebase Admin من service account JSON, topic `company_{id}`, APIs list/read/broadcast + hooks موافقة الطلبات/confirmPayroll؛ موبايل: messaging + inbox `/notifications`. **MULTI**.
+- **Auto**: Punch-report export بدون BioTime — `listLocalEmpCodes` / `listAllEmpCodesForPunchReport`؛ `queuePunchReportExport` يتخطى sync ويُرجع `usedLocal` + رسالة؛ مسار export-xlsx/download يمرّر fallback؛ esbuild dist + PM2 restart. **MULTI**.
+- **Auto**: Parent/child quota — child caps ≤ parent; sum sibling caps ≤ parent; group dashboard user/employee counts ≤ root caps; membership link child-only under home parent; `set-password` + revoke tokens on reset; unit `companyGroupQuota.test.ts`. **MULTI**.
+- **Auto**: yasser/levi E1001 — grid `test` من 2026-10-04؛ B.10 على 4–18 أكتوبر (إصلاح 5–6 بدون shiftId). **MULTI**.
 - **Auto**: Super Admin companies UI — optional parent company on create; «شركة أم» edit dialog; list shows `parentCompany`; API create accepts `parentCompanyId`; cycle guard on parent chain. **MULTI**.
 - **Auto**: Multi-company membership — `user_company_memberships` + `parent_company_id`; auth accepts `X-Company-Id`/`activeCompanyId` when membership exists; `/me` + login return `memberships`; admin list/add/remove; `/me` user load via `prismaBase` when switched tenant. CRM sales — `ownerUserId`, `nextFollowUpAt`, `source`, `sales_request_activities`, manual create, list analytics, note API. E2E `companyMembership.test.ts`. Migration `20261007120000_membership_crm`. **MULTI**.
 - **Auto**: HR sidebar `hr_requests` (موافقة الطلبات → `/requests`) + `MENU_FEATURE_MAP` entitlement. **MULTI**.

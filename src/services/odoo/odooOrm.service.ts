@@ -34,7 +34,7 @@ async function jsonRpcCall<T>(
   const res = await axios.post(
     `${baseUrl}/jsonrpc`,
     { jsonrpc: '2.0', method: 'call', params, id: Date.now() },
-    { timeout: 120000, headers: { 'Content-Type': 'application/json' } },
+    { timeout: 300000, headers: { 'Content-Type': 'application/json' } },
   );
   if (res.data?.error) {
     const err = res.data.error;

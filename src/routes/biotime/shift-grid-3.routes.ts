@@ -74,7 +74,7 @@ router.post('/shift-grid/cell/update', requireAuth, requireHrOrBranchManager, as
     include: { shift: true },
   });
 
-  await syncEmployeeLifecycleFromCellFlags(existing.employeeId, flags, {
+  const lifecycle = await syncEmployeeLifecycleFromCellFlags(existing.employeeId, flags, {
     actor: req.user?.id,
   });
 
@@ -121,6 +121,8 @@ router.post('/shift-grid/cell/update', requireAuth, requireHrOrBranchManager, as
       display_label: formatGridCellLabel(line),
       line: shiftGridLineJson(line),
       cell: gridCellFromLine(line),
+      lifecycleAction: lifecycle.action,
+      longAdvanceWarning: lifecycle.longAdvanceWarning,
     }),
     req.rpcId,
   );
@@ -156,7 +158,7 @@ router.post('/shift-grid/bulk/row', requireAuth, requireHrOrBranchManager, async
     where: lineWhere,
     data: afterFlags,
   });
-  await syncEmployeeLifecycleFromCellFlags(employeeId, flags, {
+  const lifecycle = await syncEmployeeLifecycleFromCellFlags(employeeId, flags, {
     actor: req.user?.id,
   });
   const payload = await shiftGridPayload(gridId, { includeData: false, req });
@@ -176,7 +178,15 @@ router.post('/shift-grid/bulk/row', requireAuth, requireHrOrBranchManager, async
     },
     route: '/shift-grid/bulk/row',
   });
-  jsonRpcSuccess(res, biotimeOk(payload ?? { message: 'Row updated' }), req.rpcId);
+  jsonRpcSuccess(
+    res,
+    biotimeOk({
+      ...(payload ?? { message: 'Row updated' }),
+      lifecycleAction: lifecycle.action,
+      longAdvanceWarning: lifecycle.longAdvanceWarning,
+    }),
+    req.rpcId,
+  );
 }));
 
 router.post('/shift-grid/bulk/column', requireAuth, requireHrOrBranchManager, asyncHandler(async (req, res) => {
@@ -199,6 +209,9 @@ router.post('/shift-grid/bulk/column', requireAuth, requireHrOrBranchManager, as
   });
 
   const action = lifecycleActionFromFlags(flags);
+  const longAdvanceArchiveWarnings: NonNullable<
+    Awaited<ReturnType<typeof applyMergedLifecycleAction>>['longAdvanceWarning']
+  >[] = [];
   if (action !== 'none') {
     const columnLines = await prisma.shiftGridLine.findMany({
       where: { gridId, date },
@@ -206,9 +219,12 @@ router.post('/shift-grid/bulk/column', requireAuth, requireHrOrBranchManager, as
       distinct: ['employeeId'],
     });
     for (const row of columnLines) {
-      await applyMergedLifecycleAction(row.employeeId, action, {
+      const lifecycle = await applyMergedLifecycleAction(row.employeeId, action, {
         actor: req.user?.id,
       });
+      if (lifecycle.longAdvanceWarning) {
+        longAdvanceArchiveWarnings.push(lifecycle.longAdvanceWarning);
+      }
     }
   }
 
@@ -243,7 +259,14 @@ router.post('/shift-grid/bulk/column', requireAuth, requireHrOrBranchManager, as
     },
     route: '/shift-grid/bulk/column',
   });
-  jsonRpcSuccess(res, biotimeOk(payload ?? { message: 'Column updated' }), req.rpcId);
+  jsonRpcSuccess(
+    res,
+    biotimeOk({
+      ...(payload ?? { message: 'Column updated' }),
+      longAdvanceArchiveWarnings,
+    }),
+    req.rpcId,
+  );
 }));
 
 export default router;

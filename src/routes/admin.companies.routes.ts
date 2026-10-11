@@ -146,8 +146,13 @@ router.post(
       });
       const company = await companyService.getCompany(id);
       jsonRpcSuccess(res, biotimeOk({ company }), req.rpcId);
-    } catch {
-      jsonRpcSuccess(res, biotimeFail('Company not found', 'NOT_FOUND'), req.rpcId);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Update failed';
+      const code =
+        e && typeof e === 'object' && 'errorCode' in e
+          ? String((e as { errorCode: string }).errorCode)
+          : 'ERROR';
+      jsonRpcSuccess(res, biotimeFail(msg, code), req.rpcId);
     }
   }),
 );

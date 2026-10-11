@@ -16,6 +16,13 @@ import { validateEgyptianIban } from '../../utils/iban';
 import { writeAudit, shallowFieldDiffs } from '../../services/auditLog.service';
 import { generateWorkEmailPassword } from '../../services/employeeWorkEmail.service';
 import { syncEmployeeLoginFromWorkEmail } from '../../services/employeeLogin.service';
+import { getOutstandingLongAdvanceWarning } from '../../services/advances.service';
+import {
+  deleteArchivedEmployeesHoldingCode,
+  findActiveEmployeeCodeConflict,
+  findArchivedEmployeeCodeConflict,
+  isValidEmployeeCode,
+} from '../../services/employeeCode.service';
 
 const router = Router();
 
@@ -170,6 +177,73 @@ router.post('/employees/update', requireAuth, requireHr, asyncHandler(async (req
     data.biotimeSynced = false;
   }
 
+  const nextCodeRaw =
+    typeof data.code === 'string'
+      ? data.code
+      : typeof data.identificationId === 'string'
+        ? data.identificationId
+        : null;
+  const nextCode = nextCodeRaw != null ? String(nextCodeRaw).trim() : '';
+  const previousCode = String(existing.code ?? existing.identificationId ?? '').trim();
+
+  if (nextCode && nextCode.toLowerCase() !== previousCode.toLowerCase()) {
+    if (!isValidEmployeeCode(nextCode)) {
+      jsonRpcSuccess(
+        res,
+        biotimeFail('كود البصمة: أحرف إنجليزية وأرقام و _ - فقط', 'VALIDATION'),
+        req.rpcId,
+      );
+      return;
+    }
+
+    const confirmTakeArchivedCode =
+      params.confirmTakeArchivedCode === true ||
+      params.confirmTakeArchivedCode === 'true';
+
+    const activeConflict = await findActiveEmployeeCodeConflict(nextCode, id);
+    if (activeConflict) {
+      jsonRpcSuccess(
+        res,
+        biotimeFail(`الكود ${nextCode} مستخدم بالفعل لموظف نشط`, 'DUPLICATE', {
+          data: {
+            conflictEmployeeId: activeConflict.id,
+            conflictName: activeConflict.name,
+            code: nextCode,
+            archived: false,
+          },
+        }),
+        req.rpcId,
+      );
+      return;
+    }
+
+    const archivedConflict = await findArchivedEmployeeCodeConflict(nextCode, id);
+    if (archivedConflict && !confirmTakeArchivedCode) {
+      jsonRpcSuccess(
+        res,
+        biotimeFail(
+          `الكود ${nextCode} مستخدم لموظف مؤرشف (${archivedConflict.name || archivedConflict.id}). المتابعة ستحذف السجل المؤرشف نهائيًا.`,
+          'CODE_ARCHIVED_CONFLICT',
+          {
+            data: {
+              conflictEmployeeId: archivedConflict.id,
+              conflictName: archivedConflict.name,
+              code: nextCode,
+              archived: true,
+              canConfirm: true,
+            },
+          },
+        ),
+        req.rpcId,
+      );
+      return;
+    }
+
+    if (archivedConflict && confirmTakeArchivedCode) {
+      await deleteArchivedEmployeesHoldingCode(nextCode, id);
+    }
+  }
+
   let employee = await prisma.employeeProfile.update({
     where: { id },
     data,
@@ -243,11 +317,17 @@ router.post('/employees/update', requireAuth, requireHr, asyncHandler(async (req
     }
   }
 
+  let longAdvanceWarning: Awaited<ReturnType<typeof getOutstandingLongAdvanceWarning>> = null;
+  if (existing.active && !employee.active) {
+    longAdvanceWarning = await getOutstandingLongAdvanceWarning(id);
+  }
+
   jsonRpcSuccess(res, biotimeOk({
     employee: {
       ...employeeJson(employee, true),
       custodies: await listEmployeeCustodies(id),
     },
+    longAdvanceWarning,
   }), req.rpcId);
 }));
 

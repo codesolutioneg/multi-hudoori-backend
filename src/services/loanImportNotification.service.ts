@@ -9,6 +9,7 @@ import {
   calculateLoanPaymentAmounts,
   type LoanAccountsExportLine,
 } from './odoo/odooLoanAccounts.service';
+import { isLoanNotificationEmailEnabled } from './notificationEmail.service';
 
 export type LoanImportNotificationResult = {
   sent: boolean;
@@ -48,6 +49,14 @@ function displayBranchName(
 export async function sendLoanImportNotifications(
   importId: string,
 ): Promise<LoanImportNotificationResult> {
+  if (!(await isLoanNotificationEmailEnabled())) {
+    return {
+      sent: false,
+      sentBranches: 0,
+      sentRecipients: [],
+      failures: [],
+    };
+  }
   const batch = await prisma.advanceLoanImport.findUnique({
     where: { id: importId },
     include: {

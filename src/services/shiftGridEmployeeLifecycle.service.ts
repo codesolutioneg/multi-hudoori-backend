@@ -6,10 +6,19 @@
  */
 import type { CellFlags } from './shiftGridData.service';
 import { archiveEmployee, restoreEmployee } from './employeeArchive.service';
+import {
+  getOutstandingLongAdvanceWarningWithEmployee,
+  type LongAdvanceWarningWithEmployee,
+} from './advances.service';
 import { prisma } from '../prisma/client';
 import { logger } from '../utils/logger';
 
 export type LifecycleAction = 'archive' | 'restore' | 'none';
+
+export type LifecycleSyncResult = {
+  action: LifecycleAction;
+  longAdvanceWarning: LongAdvanceWarningWithEmployee | null;
+};
 
 /** Exit / left-work statuses that should archive the employee. */
 export function isDepartureCellFlags(
@@ -44,36 +53,40 @@ export async function syncEmployeeLifecycleFromCellFlags(
   employeeId: string,
   flags: CellFlags,
   options?: { actor?: string | null },
-): Promise<LifecycleAction> {
+): Promise<LifecycleSyncResult> {
   const action = lifecycleActionFromFlags(flags);
-  if (action === 'none') return 'none';
+  if (action === 'none') return { action: 'none', longAdvanceWarning: null };
 
   const emp = await prisma.employeeProfile.findUnique({
     where: { id: employeeId },
     select: { id: true, active: true },
   });
-  if (!emp) return 'none';
+  if (!emp) return { action: 'none', longAdvanceWarning: null };
 
   try {
     if (action === 'archive') {
-      if (!emp.active) return 'archive';
+      if (!emp.active) {
+        const warning = await getOutstandingLongAdvanceWarningWithEmployee(employeeId);
+        return { action: 'archive', longAdvanceWarning: warning };
+      }
       await archiveEmployee(
         employeeId,
         departureReason(flags),
         options?.actor ?? undefined,
       );
-      return 'archive';
+      const warning = await getOutstandingLongAdvanceWarningWithEmployee(employeeId);
+      return { action: 'archive', longAdvanceWarning: warning };
     }
 
-    if (emp.active) return 'restore';
+    if (emp.active) return { action: 'restore', longAdvanceWarning: null };
     await restoreEmployee(employeeId);
-    return 'restore';
+    return { action: 'restore', longAdvanceWarning: null };
   } catch (err) {
     logger.warn(
       { err, employeeId, action },
       'shift-grid lifecycle archive/restore failed',
     );
-    return 'none';
+    return { action: 'none', longAdvanceWarning: null };
   }
 }
 
@@ -88,34 +101,38 @@ export async function applyMergedLifecycleAction(
   employeeId: string,
   action: LifecycleAction,
   options?: { actor?: string | null; archiveReason?: string },
-): Promise<LifecycleAction> {
-  if (action === 'none') return 'none';
+): Promise<LifecycleSyncResult> {
+  if (action === 'none') return { action: 'none', longAdvanceWarning: null };
 
   const emp = await prisma.employeeProfile.findUnique({
     where: { id: employeeId },
     select: { id: true, active: true },
   });
-  if (!emp) return 'none';
+  if (!emp) return { action: 'none', longAdvanceWarning: null };
 
   try {
     if (action === 'archive') {
-      if (!emp.active) return 'archive';
+      if (!emp.active) {
+        const warning = await getOutstandingLongAdvanceWarningWithEmployee(employeeId);
+        return { action: 'archive', longAdvanceWarning: warning };
+      }
       await archiveEmployee(
         employeeId,
         options?.archiveReason?.trim() || 'أوتوماتيك من جدول الشيفت: خروج',
         options?.actor ?? undefined,
       );
-      return 'archive';
+      const warning = await getOutstandingLongAdvanceWarningWithEmployee(employeeId);
+      return { action: 'archive', longAdvanceWarning: warning };
     }
 
-    if (emp.active) return 'restore';
+    if (emp.active) return { action: 'restore', longAdvanceWarning: null };
     await restoreEmployee(employeeId);
-    return 'restore';
+    return { action: 'restore', longAdvanceWarning: null };
   } catch (err) {
     logger.warn(
       { err, employeeId, action },
       'shift-grid lifecycle archive/restore failed',
     );
-    return 'none';
+    return { action: 'none', longAdvanceWarning: null };
   }
 }

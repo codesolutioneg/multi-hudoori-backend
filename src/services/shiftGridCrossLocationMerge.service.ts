@@ -1,11 +1,11 @@
 /**
- * Option A — «last week’s branch owns the month».
+ * Option A — «the employee card’s branch owns the month».
  *
- * For payroll period P, each employee’s home branch is the location of the
- * **last weekly grid** (by dateFrom) in P where they have any shift line.
- * When merging branch B’s weeks, **all** of that employee’s days in P are
- * collected into B’s monthly grid — including days from other branches’ weeks.
- * Employees whose home branch is not B are excluded from B’s merge.
+ * At merge time, each employee’s home branch is `employeeProfile.locationId`
+ * (archived employees keep their card location). When merging branch B’s
+ * weeks, **all** of that employee’s days in period P are collected into B’s
+ * monthly grid — including days from other branches’ weeks. Employees whose
+ * card location is not B are excluded from B’s merge.
  */
 import type { ShiftGrid, ShiftGridLine } from '@prisma/client';
 import { prisma } from '../prisma/client';
@@ -35,50 +35,19 @@ function isWeeklyGrid(grid: Pick<ShiftGrid, 'mergedFromGridIds'>): boolean {
   return grid.mergedFromGridIds.length === 0;
 }
 
-/** Pure helper — last contributing week in period wins the home branch. */
-export function resolveEmployeeHomeBranchesFromLines(params: {
-  weeklyGrids: Pick<ShiftGrid, 'id' | 'locationId' | 'dateFrom'>[];
-  lines: Pick<ShiftGridLine, 'employeeId' | 'gridId' | 'date'>[];
-  dateFrom: Date;
-  dateTo: Date;
-}): Map<string, EmployeeHomeBranch> {
-  const fromKey = dayKey(params.dateFrom);
-  const toKey = dayKey(params.dateTo);
-  const gridById = new Map(params.weeklyGrids.map((g) => [g.id, g]));
-
-  const weeksByEmployee = new Map<
-    string,
-    Map<string, { locationId: string; dateFrom: Date; gridId: string }>
-  >();
-
-  for (const line of params.lines) {
-    const key = dayKey(line.date);
-    if (key < fromKey || key > toKey) continue;
-    const grid = gridById.get(line.gridId);
-    if (!grid) continue;
-
-    const perEmp = weeksByEmployee.get(line.employeeId) ?? new Map();
-    if (!perEmp.has(grid.id)) {
-      perEmp.set(grid.id, {
-        gridId: grid.id,
-        locationId: grid.locationId ?? '',
-        dateFrom: grid.dateFrom,
-      });
-    }
-    weeksByEmployee.set(line.employeeId, perEmp);
-  }
-
+/** Pure helper — card location at merge time wins, archived included. */
+export function resolveEmployeeHomeBranchesFromCards(
+  employees: { id: string; locationId: string | null }[],
+): Map<string, EmployeeHomeBranch> {
   const home = new Map<string, EmployeeHomeBranch>();
-  for (const [employeeId, weeks] of weeksByEmployee) {
-    const ranked = [...weeks.values()].sort(
-      (a, b) => a.dateFrom.getTime() - b.dateFrom.getTime(),
-    );
-    const last = ranked[ranked.length - 1];
-    home.set(employeeId, {
-      employeeId,
-      homeLocationId: last.locationId,
-      homeGridId: last.gridId,
-      homeGridDateFrom: last.dateFrom,
+  for (const employee of employees) {
+    const locationId = String(employee.locationId ?? '').trim();
+    if (!locationId) continue;
+    home.set(employee.id, {
+      employeeId: employee.id,
+      homeLocationId: locationId,
+      homeGridId: '',
+      homeGridDateFrom: new Date(0),
     });
   }
   return home;
@@ -152,12 +121,19 @@ export async function findPeriodMovers(params: {
     where: { gridId: { in: weeklyGrids.map((g) => g.id) } },
     select: { employeeId: true, gridId: true, date: true },
   });
-  const homeByEmployee = resolveEmployeeHomeBranchesFromLines({
-    weeklyGrids,
-    lines,
-    dateFrom: params.dateFrom,
-    dateTo: params.dateTo,
-  });
+  const employeeIds = [...new Set(lines.map((l) => l.employeeId))];
+  const cards = employeeIds.length
+    ? await prisma.employeeProfile.findMany({
+        where: { id: { in: employeeIds } },
+        select: {
+          id: true,
+          locationId: true,
+          workLocation: { select: { id: true, name: true, actualName: true } },
+        },
+      })
+    : [];
+  const homeByEmployee = resolveEmployeeHomeBranchesFromCards(cards);
+  const cardById = new Map(cards.map((e) => [e.id, e]));
 
   const gridMeta = new Map(
     weeklyGrids.map((g) => [
@@ -192,10 +168,10 @@ export async function findPeriodMovers(params: {
   return movers.map(([employeeId, locSet]) => {
     const home = homeByEmployee.get(employeeId);
     const homeLocId = home?.homeLocationId ?? '';
-    const homeGrid = weeklyGrids.find((g) => g.id === home?.homeGridId);
+    const card = cardById.get(employeeId);
     const homeName =
-      homeGrid?.location?.actualName?.trim() ||
-      homeGrid?.location?.name?.trim() ||
+      card?.workLocation?.actualName?.trim() ||
+      card?.workLocation?.name?.trim() ||
       'فرع غير محدد';
     const locationIds = [...locSet];
     const locationNames = locationIds.map((id) => {
@@ -246,12 +222,14 @@ export async function loadOptionAMergeLines(params: {
     orderBy: [{ employeeId: 'asc' }, { date: 'asc' }],
   });
 
-  const homeByEmployee = resolveEmployeeHomeBranchesFromLines({
-    weeklyGrids,
-    lines: allLines,
-    dateFrom: params.dateFrom,
-    dateTo: params.dateTo,
-  });
+  const employeeIds = [...new Set(allLines.map((l) => l.employeeId))];
+  const cards = employeeIds.length
+    ? await prisma.employeeProfile.findMany({
+        where: { id: { in: employeeIds } },
+        select: { id: true, locationId: true },
+      })
+    : [];
+  const homeByEmployee = resolveEmployeeHomeBranchesFromCards(cards);
 
   const sourceSet = new Set(params.sourceGridIds);
   const { lines, excludedEmployeeIds, importedEmployeeIds } = filterLinesForHomeLocation({

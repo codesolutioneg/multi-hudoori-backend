@@ -42,6 +42,7 @@ router.post('/config/update', requireAuth, requireHrManager, asyncHandler(async 
     employeeTeamShowLeave: 'employeeTeamShowLeave',
     employeeTeamShowSickLeave: 'employeeTeamShowSickLeave',
     payrollFixedMonthDaysEnabled: 'payrollFixedMonthDaysEnabled',
+    loanNotificationEmailsEnabled: 'loanNotificationEmailsEnabled',
   };
   for (const [k, field] of Object.entries(boolMap)) {
     if (k in params) data[field] = parseRpcBool(params[k]);

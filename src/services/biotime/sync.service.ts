@@ -198,6 +198,28 @@ async function finishSyncJob(
   });
 }
 
+/**
+ * Resolve local employee for a BioTime row.
+ * Source of truth = emp_code (+ biotimeEmpId). Never match by display name
+ * (Arabic/English conversion collisions across companies/seeds).
+ */
+async function findEmployeeForBioTimeRow(row: BioTimeEmployee, empCode: string) {
+  const byBioId = await prisma.employeeProfile.findFirst({
+    where: { mapping: { biotimeEmpId: row.id } },
+    include: { mapping: true },
+  });
+  if (byBioId) return byBioId;
+
+  if (!empCode) return null;
+
+  return prisma.employeeProfile.findFirst({
+    where: {
+      OR: [{ code: empCode }, { barcode: empCode }, { identificationId: empCode }],
+    },
+    include: { mapping: true },
+  });
+}
+
 export async function syncEmployees(): Promise<number> {
   const connector = await BioTimeConnector.fromDb();
   let page = 1;
@@ -205,6 +227,7 @@ export async function syncEmployees(): Promise<number> {
   // Seats full: stop creating locals but keep updating existing ones (punch sync must keep running).
   let quotaReached = false;
   let skippedForQuota = 0;
+  let skippedNoCode = 0;
 
   while (page <= 100) {
     const response = await connector.getEmployees(page, 200);
@@ -213,6 +236,11 @@ export async function syncEmployees(): Promise<number> {
 
     for (const row of rows) {
       const empCode = String(row.emp_code ?? '').trim();
+      // Punches key off emp_code — rows without a code cannot be reliably linked.
+      if (!empCode) {
+        skippedNoCode++;
+        continue;
+      }
       const firstName = String(row.first_name ?? '').trim();
       const lastName = String(row.last_name ?? '').trim();
       const fullName = `${firstName} ${lastName}`.trim();
@@ -221,10 +249,7 @@ export async function syncEmployees(): Promise<number> {
       const deptId = await resolveDepartmentId(biotimeDeptId(row));
       const bioDeptId = biotimeDeptId(row);
 
-      let employee = await prisma.employeeProfile.findFirst({
-        where: { OR: [{ code: empCode }, { mapping: { biotimeEmpId: row.id } }] },
-        include: { mapping: true },
-      });
+      let employee = await findEmployeeForBioTimeRow(row, empCode);
 
       if (!employee) {
         if (quotaReached) {
@@ -258,58 +283,54 @@ export async function syncEmployees(): Promise<number> {
             include: { mapping: true },
           });
         } catch (err) {
-          if (!isQuotaError(err)) throw err;
-          quotaReached = true;
-          skippedForQuota++;
-          continue;
+          if (!isQuotaError(err)) {
+            // Race / pre-existing code: re-resolve by emp_code and continue as update.
+            employee = await findEmployeeForBioTimeRow(row, empCode);
+            if (!employee) throw err;
+          } else {
+            quotaReached = true;
+            skippedForQuota++;
+            continue;
+          }
         }
-      } else if (employee.biotimeSynced) {
-        await prisma.employeeProfile.update({
-          where: { id: employee.id },
-          data: {
-            name: fullName || employee.name || name,
-            displayName: fullName || employee.displayName || displayName,
-            code: empCode || employee.code,
-            biotimeSynced: true,
-            ...(deptId ? { departmentId: deptId } : {}),
-          },
-        });
-        if (employee.mapping) {
-          await prisma.employeeMapping.update({
-            where: { id: employee.mapping.id },
-            data: {
-              biotimeEmpId: row.id,
-              biotimeEmpCode: empCode,
-              firstName: row.first_name,
-              lastName: row.last_name,
-              cardNo: row.card_no ?? employee.mapping.cardNo,
-              mobile: row.mobile ?? employee.mapping.mobile,
-              email: row.email ?? employee.mapping.email,
-              gender: row.gender ?? employee.mapping.gender,
-              biotimeDepartmentId: bioDeptId,
-              lastSync: new Date(),
-            },
-          });
-        } else {
-          await prisma.employeeMapping.create({
-            data: {
-              employeeId: employee.id,
-              biotimeEmpId: row.id,
-              biotimeEmpCode: empCode,
-              firstName: row.first_name,
-              lastName: row.last_name,
-              biotimeDepartmentId: bioDeptId,
-              lastSync: new Date(),
-            },
-          });
-        }
-      } else if (employee.mapping) {
+      }
+
+      if (!employee) {
+        skippedForQuota++;
+        continue;
+      }
+
+      // Always refresh mapping + emp_code (punch identity). Names from BioTime
+      // fill empty locals; HR-owned names (biotimeSynced=false) stay unless empty.
+      const keepLocalName = !employee.biotimeSynced && Boolean(employee.name?.trim());
+      await prisma.employeeProfile.update({
+        where: { id: employee.id },
+        data: {
+          ...(keepLocalName
+            ? {}
+            : {
+                name: fullName || employee.name || name,
+                displayName: fullName || employee.displayName || displayName,
+              }),
+          code: empCode,
+          barcode: employee.barcode?.trim() ? employee.barcode : empCode,
+          biotimeSynced: true,
+          ...(deptId ? { departmentId: deptId } : {}),
+        },
+      });
+      if (employee.mapping) {
         await prisma.employeeMapping.update({
           where: { id: employee.mapping.id },
           data: {
             biotimeEmpId: row.id,
-            biotimeEmpCode: empCode || employee.mapping.biotimeEmpCode,
-            biotimeDepartmentId: bioDeptId ?? employee.mapping.biotimeDepartmentId,
+            biotimeEmpCode: empCode,
+            firstName: row.first_name,
+            lastName: row.last_name,
+            cardNo: row.card_no ?? employee.mapping.cardNo,
+            mobile: row.mobile ?? employee.mapping.mobile,
+            email: row.email ?? employee.mapping.email,
+            gender: row.gender ?? employee.mapping.gender,
+            biotimeDepartmentId: bioDeptId,
             lastSync: new Date(),
           },
         });
@@ -341,6 +362,12 @@ export async function syncEmployees(): Promise<number> {
     });
   }
 
+  if (skippedNoCode > 0) {
+    logger.warn(
+      { skippedNoCode, companyId: requireCompanyId() },
+      'BioTime employee sync: skipped rows with empty emp_code (cannot link punches)',
+    );
+  }
   if (skippedForQuota > 0) {
     logger.warn(
       { skippedForQuota, companyId: requireCompanyId() },
@@ -397,9 +424,15 @@ export async function syncDepartments(): Promise<number> {
     if (!rows.length) break;
 
     for (const row of rows) {
-      const name = row.dept_name ?? `Dept ${row.id}`;
+      const name = row.dept_name ?? row.dept_code ?? `Dept ${row.id}`;
+      // Match ONLY by BioTime dept id / mapping — never by name (seed/Arabic collisions).
       let dept = await prisma.department.findFirst({
-        where: { OR: [{ biotimeDeptId: row.id }, { name }] },
+        where: {
+          OR: [
+            { biotimeDeptId: row.id },
+            { mapping: { biotimeDeptId: row.id } },
+          ],
+        },
         include: { mapping: true },
       });
 
@@ -408,7 +441,7 @@ export async function syncDepartments(): Promise<number> {
           data: {
             name,
             biotimeDeptId: row.id,
-            biotimeDeptCode: row.dept_code,
+            biotimeDeptCode: row.dept_code ?? null,
             mapping: {
               create: {
                 biotimeDeptId: row.id,
@@ -422,8 +455,32 @@ export async function syncDepartments(): Promise<number> {
       } else {
         await prisma.department.update({
           where: { id: dept.id },
-          data: { name, biotimeDeptId: row.id, biotimeDeptCode: row.dept_code },
+          data: {
+            // Keep local name if already set; still bind BioTime ids for punch/employee dept resolve.
+            biotimeDeptId: row.id,
+            biotimeDeptCode: row.dept_code ?? dept.biotimeDeptCode,
+            ...(dept.name?.trim() ? {} : { name }),
+          },
         });
+        if (dept.mapping) {
+          await prisma.departmentMapping.update({
+            where: { id: dept.mapping.id },
+            data: {
+              biotimeDeptId: row.id,
+              biotimeDeptCode: row.dept_code,
+              biotimeDeptName: name,
+            },
+          });
+        } else {
+          await prisma.departmentMapping.create({
+            data: {
+              departmentId: dept.id,
+              biotimeDeptId: row.id,
+              biotimeDeptCode: row.dept_code,
+              biotimeDeptName: name,
+            },
+          });
+        }
       }
       count++;
     }

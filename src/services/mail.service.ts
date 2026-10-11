@@ -6,6 +6,7 @@ import type { Transporter } from 'nodemailer';
 import { UserRole } from '@prisma/client';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { isLoanNotificationEmailEnabled } from './notificationEmail.service';
 
 let transporter: Transporter | null = null;
 
@@ -416,6 +417,9 @@ export async function sendLoanImportApprovedEmail(params: {
     base64: string;
   };
 }): Promise<{ sent: boolean; recipients: string[]; error?: string }> {
+  if (!(await isLoanNotificationEmailEnabled())) {
+    return { sent: false, recipients: [], error: 'EMAILS_DISABLED' };
+  }
   const recipients = [
     ...new Set(
       params.recipients
@@ -581,6 +585,9 @@ export async function sendPayrollJournalSummaryEmail(params: {
   fawryCommission: number;
   attachments?: { filename: string; base64: string }[];
 }): Promise<{ sent: boolean; recipients: string[]; error?: string }> {
+  if (!(await isLoanNotificationEmailEnabled())) {
+    return { sent: false, recipients: [], error: 'EMAILS_DISABLED' };
+  }
   const recipients = [
     ...new Set(
       params.recipients

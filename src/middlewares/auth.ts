@@ -5,7 +5,6 @@ import { prismaBase } from '../prisma/client';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 import { asyncHandler } from './asyncHandler';
 import { extractRequestToken } from '../utils/requestToken';
-import { enterTenant } from '../tenant/context';
 import { userHasMembership } from '../services/companyMembership.service';
 
 function extractActiveCompanyId(req: Request): string | null {
@@ -34,11 +33,6 @@ export const requireAuth = asyncHandler(async (req: Request, _res: Response, nex
       companyId: null,
       activeCompanyId,
     };
-    enterTenant({
-      companyId: activeCompanyId,
-      isImpersonatingCompany: Boolean(activeCompanyId),
-      actorUserId: 'platform-admin',
-    });
     next();
     return;
   }
@@ -99,11 +93,6 @@ export const requireAuth = asyncHandler(async (req: Request, _res: Response, nex
     activeCompanyId: activeCompanyId ?? null,
   };
 
-  enterTenant({
-    companyId: activeCompanyId ?? null,
-    isImpersonatingCompany: isPlatformAdmin && Boolean(activeCompanyId),
-    actorUserId: user.id,
-  });
   next();
 });
 

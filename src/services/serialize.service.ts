@@ -81,6 +81,8 @@ export function employeeListJson(employee: EmployeeWithRelations) {
     locationId: employee.locationId ?? false,
     location: employee.workLocation?.name ?? employee.location ?? '',
     locationName: employee.workLocation?.name ?? employee.location ?? '',
+    /** Linked app login — required for direct push from HR dashboard. */
+    userId: employee.userId ?? false,
   };
 }
 
@@ -122,6 +124,7 @@ export function employeeJson(
     basicSalary: employee.basicSalary,
     biotimeSynced: employee.biotimeSynced,
     biotimeDeviceId: employee.biotimeDeviceId ?? false,
+    userId: employee.userId ?? false,
     ...employeeCustomFieldsJson(employee),
   };
 
@@ -194,6 +197,7 @@ export function configSettingsJson(
     advanceEnforceLimit: config.advanceEnforceLimit !== false,
     advanceEligibilitySource: config.advanceEligibilitySource ?? 'punch_report',
     tipJobTitleIds: config.tipJobTitleIds ?? [],
+    loanNotificationEmailsEnabled: config.loanNotificationEmailsEnabled !== false,
     // Prefixed to stay unambiguous next to duplicateGraceMinutes.
     ...latePolicyConfigJson(config),
     payrollMonthStartDay: config.payrollMonthStartDay ?? 26,

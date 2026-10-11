@@ -6,7 +6,13 @@ import { p } from './route-helpers';
 import { applyEmployeeLocation, employeesForLocation, resolveLocation, relocateEmployeesToGridLocation, } from '../../services/location.service';
 import { assertGridLocationAccess, getHrLocationScope, applyHrLocationScopeToEmployeeWhere, getHrLocationScopeFromReq, assertEmployeeLocationAccess } from '../../services/userLocationScope.service';
 import { employeeJson, employeeListJson, configSettingsWithCounts, configSummaryJson, shiftJson, shiftAssignmentJson, deviceJson, departmentJson, attendanceJson, shiftGridJson, shiftGridLineJson, payrollJson, payrollLineJson, deductionJson, advanceShortJson, advanceLongJson, locationJson, insuranceCompanyJson, DEDUCTION_TYPES, } from '../../services/serialize.service';
-import { generateUniqueEmployeeCode, isValidEmployeeCode } from '../../services/employeeCode.service';
+import {
+  deleteArchivedEmployeesHoldingCode,
+  findActiveEmployeeCodeConflict,
+  findArchivedEmployeeCodeConflict,
+  generateUniqueEmployeeCode,
+  isValidEmployeeCode,
+} from '../../services/employeeCode.service';
 import { parseEgyptianNationalId, validateEgyptianNationalId } from '../../utils/egyptianNationalId';
 import { prisma } from '../../prisma/client';
 import { pushEmployeeToBioTime } from '../../services/biotime/employeePush.service';
@@ -80,10 +86,51 @@ router.post('/employees/create', requireAuth, requireHr, asyncHandler(async (req
     return;
   }
 
-  const duplicate = await prisma.employeeProfile.findFirst({ where: { code } });
-  if (duplicate) {
-    jsonRpcSuccess(res, biotimeFail(`الكود ${code} مستخدم بالفعل`, 'DUPLICATE'), req.rpcId);
+  const confirmTakeArchivedCode =
+    params.confirmTakeArchivedCode === true ||
+    params.confirmTakeArchivedCode === 'true';
+
+  const activeConflict = await findActiveEmployeeCodeConflict(code);
+  if (activeConflict) {
+    jsonRpcSuccess(
+      res,
+      biotimeFail(`الكود ${code} مستخدم بالفعل لموظف نشط`, 'DUPLICATE', {
+        data: {
+          conflictEmployeeId: activeConflict.id,
+          conflictName: activeConflict.name,
+          code,
+          archived: false,
+        },
+      }),
+      req.rpcId,
+    );
     return;
+  }
+
+  const archivedConflict = await findArchivedEmployeeCodeConflict(code);
+  if (archivedConflict && !confirmTakeArchivedCode) {
+    jsonRpcSuccess(
+      res,
+      biotimeFail(
+        `الكود ${code} مستخدم لموظف مؤرشف (${archivedConflict.name || archivedConflict.id}). المتابعة ستحذف السجل المؤرشف نهائيًا.`,
+        'CODE_ARCHIVED_CONFLICT',
+        {
+          data: {
+            conflictEmployeeId: archivedConflict.id,
+            conflictName: archivedConflict.name,
+            code,
+            archived: true,
+            canConfirm: true,
+          },
+        },
+      ),
+      req.rpcId,
+    );
+    return;
+  }
+
+  if (archivedConflict && confirmTakeArchivedCode) {
+    await deleteArchivedEmployeesHoldingCode(code);
   }
 
   let departmentId: string | null = null;

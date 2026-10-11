@@ -7,7 +7,7 @@ import { loadShiftGridForAccess } from './shift-grid-helpers';
 import * as payrollService from '../../services/payroll.service';
 import * as payslipPdfService from '../../services/payslipPdf.service';
 import { employeeJson, employeeListJson, configSettingsWithCounts, configSummaryJson, shiftJson, shiftAssignmentJson, deviceJson, departmentJson, attendanceJson, shiftGridJson, shiftGridLineJson, payrollJson, payrollLineJson, deductionJson, advanceShortJson, advanceLongJson, locationJson, insuranceCompanyJson, DEDUCTION_TYPES, } from '../../services/serialize.service';
-import { exportPayrollXlsx, exportPayslipsXlsx, exportCashFawryXlsx, exportFileResponse, } from '../../services/payrollExport.service';
+import { exportPayrollXlsx, exportPayslipsXlsx, exportSelectedPayslipsXlsx, exportCashFawryXlsx, exportFileResponse, } from '../../services/payrollExport.service';
 import { getSentSnapshotOrGenerate } from '../../services/payrollSentSnapshot.service';
 import { exportPunchReportFileResponse, exportSelectedGridPunchReportXlsx, exportShiftGridPunchReportXlsx, } from '../../services/punchReportExcel.service';
 import {
@@ -126,6 +126,36 @@ router.post('/payroll/export-payslips-xlsx', requireAuth, requireHr, asyncHandle
   const id = String(p(req).id ?? p(req).payrollId ?? '');
   const { base64, filename } = await exportPayslipsXlsx(id);
   jsonRpcSuccess(res, biotimeOk(exportFileResponse(base64, filename)), req.rpcId);
+}));
+
+router.post('/payroll/period/payslips/export-xlsx', requireAuth, requireHr, asyncHandler(async (req, res) => {
+  const params = p(req);
+  const dateFrom = params.dateFrom != null ? String(params.dateFrom) : null;
+  const dateTo = params.dateTo != null ? String(params.dateTo) : null;
+  const selections = Array.isArray(params.selections) ? params.selections : [];
+  const result = await exportSelectedPayslipsXlsx({
+    dateFrom,
+    dateTo,
+    selections: selections as { payrollId?: string; employeeId?: string }[],
+  });
+  await writeAudit({
+    req,
+    module: 'payroll',
+    action: 'payroll.period.payslips_xlsx',
+    entityType: 'PayrollPeriod',
+    entityId: `${dateFrom}_${dateTo}`,
+    summary: `تنزيل قسائم Payslip محددة (${result.count})`,
+    counts: { fileCount: result.count },
+    route: '/payroll/period/payslips/export-xlsx',
+  });
+  jsonRpcSuccess(
+    res,
+    biotimeOk({
+      ...exportFileResponse(result.base64, result.filename),
+      count: result.count,
+    }),
+    req.rpcId,
+  );
 }));
 
 router.post('/payroll/export-cash-fawry', requireAuth, requireHr, asyncHandler(async (req, res) => {

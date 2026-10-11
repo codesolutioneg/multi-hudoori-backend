@@ -5,6 +5,7 @@ import { requireAuth, requireHr, requireHrManager } from '../../middlewares/auth
 import { p } from './route-helpers';
 import { NotFoundError, AppError } from '../../utils/errors';
 import { archiveEmployee, restoreEmployee } from '../../services/employeeArchive.service';
+import { getOutstandingLongAdvanceWarning } from '../../services/advances.service';
 import { syncEmployeeLoginFromWorkEmail } from '../../services/employeeLogin.service';
 import { assertGridLocationAccess, getHrLocationScope, applyHrLocationScopeToEmployeeWhere, getHrLocationScopeFromReq, assertEmployeeLocationAccess } from '../../services/userLocationScope.service';
 import { deleteEmployee } from '../../services/employeeDelete.service';
@@ -60,6 +61,24 @@ router.post('/employees/delete', requireAuth, requireHrManager, asyncHandler(asy
   }
 }));
 
+router.post('/employees/archive-preview', requireAuth, requireHr, asyncHandler(async (req, res) => {
+  const params = p(req);
+  const employeeId = String(params.employeeId ?? params.id ?? '');
+  if (!employeeId) {
+    jsonRpcSuccess(res, biotimeFail('employeeId required', 'VALIDATION'), req.rpcId);
+    return;
+  }
+  const existing = await prisma.employeeProfile.findUnique({ where: { id: employeeId } });
+  if (!existing) {
+    jsonRpcSuccess(res, biotimeFail('Employee not found', 'NOT_FOUND'), req.rpcId);
+    return;
+  }
+  const hrScope = await getHrLocationScopeFromReq(req);
+  assertEmployeeLocationAccess(hrScope, existing.locationId);
+  const longAdvanceWarning = await getOutstandingLongAdvanceWarning(employeeId);
+  jsonRpcSuccess(res, biotimeOk({ longAdvanceWarning }), req.rpcId);
+}));
+
 router.post('/employees/archive', requireAuth, requireHr, asyncHandler(async (req, res) => {
   const params = p(req);
   const employeeId = String(params.employeeId ?? params.id ?? '');
@@ -107,9 +126,11 @@ router.post('/employees/archive', requireAuth, requireHr, asyncHandler(async (re
       ],
       route: '/employees/archive',
     });
+    const longAdvanceWarning = await getOutstandingLongAdvanceWarning(employeeId);
     jsonRpcSuccess(res, biotimeOk({
       employee: employeeJson(employee, true),
       message: 'تمت أرشفة الموظف',
+      longAdvanceWarning,
     }), req.rpcId);
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Archive failed';

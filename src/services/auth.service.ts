@@ -152,6 +152,11 @@ export async function logout(token: string): Promise<void> {
   await prismaBase.apiToken.deleteMany({ where: { token } });
 }
 
+/** After password change, old API tokens must not keep working. */
+export async function revokeUserSessions(userId: string): Promise<void> {
+  await prismaBase.apiToken.deleteMany({ where: { userId } });
+}
+
 export async function validateToken(token: string): Promise<boolean> {
   const apiToken = await prismaBase.apiToken.findUnique({
     where: { token },

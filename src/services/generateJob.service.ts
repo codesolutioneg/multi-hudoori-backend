@@ -275,13 +275,20 @@ export async function queuePunchReportExport(options: {
   runInBackground(job.id, PUNCH_REPORT_EXPORT_JOB, async () => {
     const fs = await import('fs');
     const path = await import('path');
-    const { listAllBiotimeEmpCodes } = await import('./biotimeEmpCodes.service');
+    const { listAllEmpCodesForPunchReport } = await import('./biotimeEmpCodes.service');
     const { exportPunchReportFileResponse } = await import('./punchReportExcel.service');
     const {
       resolveEmployeesBiotimeCodes,
     } = await import('./employeePunchReport.service');
+    const {
+      BIOTIME_LOCAL_FALLBACK_MESSAGE,
+      isBioTimeConfigured,
+      isBioTimeUnavailableError,
+    } = await import('./biotime/biotimeAvailability.service');
 
     const syncFirst = options.syncFirst !== false;
+    let usedLocal = false;
+    let fallbackMessage: string | undefined;
     const update = async (progress: number, message: string) => {
       await prisma.syncJob.update({
         where: { id: job.id },
@@ -289,8 +296,14 @@ export async function queuePunchReportExport(options: {
       });
     };
 
+    const biotimeReady = await isBioTimeConfigured();
+
     if (syncFirst) {
-      if (options.includeAllBiotimeCodes) {
+      if (!biotimeReady) {
+        usedLocal = true;
+        fallbackMessage = BIOTIME_LOCAL_FALLBACK_MESSAGE;
+        await update(5, fallbackMessage);
+      } else if (options.includeAllBiotimeCodes) {
         // Scheduled auto-sync already keeps company punches current, so a full
         // month re-pull here is redundant and the main cause of the timeout.
         // Only pull what's new since the last sync (fast) then build from stored data.
@@ -298,18 +311,34 @@ export async function queuePunchReportExport(options: {
         try {
           await syncService.syncTransactionsIncremental();
         } catch (err) {
-          logger.warn({ err, jobId: job.id }, 'Incremental sync before punch export failed; using stored data');
+          if (isBioTimeUnavailableError(err)) {
+            usedLocal = true;
+            fallbackMessage = BIOTIME_LOCAL_FALLBACK_MESSAGE;
+            logger.warn({ err, jobId: job.id }, 'Incremental sync skipped; using stored punches');
+          } else {
+            logger.warn({ err, jobId: job.id }, 'Incremental sync before punch export failed; using stored data');
+          }
         }
       } else if (options.employeeIds?.length) {
         await update(5, 'جاري سحب بصمات الموظفين المحددين…');
         const resolved = await resolveEmployeesBiotimeCodes(options.employeeIds);
         if (resolved.codes.length) {
-          await syncService.syncEmployeeTransactions(
-            resolved.codes,
-            options.dateFrom,
-            options.dateTo,
-            job.id,
-          );
+          try {
+            await syncService.syncEmployeeTransactions(
+              resolved.codes,
+              options.dateFrom,
+              options.dateTo,
+              job.id,
+            );
+          } catch (err) {
+            if (isBioTimeUnavailableError(err)) {
+              usedLocal = true;
+              fallbackMessage = BIOTIME_LOCAL_FALLBACK_MESSAGE;
+              logger.warn({ err, jobId: job.id }, 'Employee punch sync skipped; using stored punches');
+            } else {
+              throw err;
+            }
+          }
         }
       }
     }
@@ -318,9 +347,14 @@ export async function queuePunchReportExport(options: {
     let empCodes: string[] | undefined;
     let employeeIds: string[] | undefined;
     if (options.includeAllBiotimeCodes) {
-      empCodes = await listAllBiotimeEmpCodes();
+      const listed = await listAllEmpCodesForPunchReport();
+      empCodes = listed.codes;
+      if (listed.usedLocal) {
+        usedLocal = true;
+        fallbackMessage = listed.fallbackMessage ?? fallbackMessage;
+      }
       if (!empCodes.length) {
-        throw new Error('لا توجد أكواد موظفين على خادم BioTime');
+        throw new Error('لا توجد أكواد بصمة مخزّنة للفترة المحددة');
       }
     } else {
       employeeIds = options.employeeIds ?? [];
@@ -346,6 +380,8 @@ export async function queuePunchReportExport(options: {
     return JSON.stringify({
       ready: true,
       filename: file.filename,
+      usedLocal,
+      ...(usedLocal && fallbackMessage ? { fallbackMessage } : {}),
     });
   });
 

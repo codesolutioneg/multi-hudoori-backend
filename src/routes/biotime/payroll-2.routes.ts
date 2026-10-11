@@ -25,6 +25,7 @@ import {
 import {
   exportPeriodCashFawryZip,
   exportPeriodPayrollSummaryXlsx,
+  exportPeriodPayrollXlsxZip,
   exportZipFileResponse,
   searchPeriodPayrollEmployees,
 } from '../../services/payrollPeriodExports.service';
@@ -146,6 +147,31 @@ router.post('/payroll/period/cash-fawry/export-zip', requireAuth, requireHr, asy
     summary: `تنزيل كاش/فوري للدورة (${result.fileCount} ملف)`,
     counts: { fileCount: result.fileCount },
     route: '/payroll/period/cash-fawry/export-zip',
+  });
+  jsonRpcSuccess(
+    res,
+    biotimeOk({
+      ...exportZipFileResponse(result.base64, result.filename),
+      fileCount: result.fileCount,
+    }),
+    req.rpcId,
+  );
+}));
+
+router.post('/payroll/period/payroll-xlsx/export-zip', requireAuth, requireHr, asyncHandler(async (req, res) => {
+  const params = p(req);
+  const dateFrom = params.dateFrom != null ? String(params.dateFrom) : null;
+  const dateTo = params.dateTo != null ? String(params.dateTo) : null;
+  const result = await exportPeriodPayrollXlsxZip({ dateFrom, dateTo });
+  await writeAudit({
+    req,
+    module: 'payroll',
+    action: 'payroll.period.payroll_xlsx_zip',
+    entityType: 'PayrollPeriod',
+    entityId: `${dateFrom}_${dateTo}`,
+    summary: `تنزيل أكاسيل رواتب الدورة (${result.fileCount} ملف)`,
+    counts: { fileCount: result.fileCount },
+    route: '/payroll/period/payroll-xlsx/export-zip',
   });
   jsonRpcSuccess(
     res,

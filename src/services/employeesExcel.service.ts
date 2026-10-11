@@ -1143,8 +1143,8 @@ export async function importEmployeesXlsx(base64: string) {
     const left = await remainingEmployeeSeats(companyId);
     if (left != null && newCodes.size > left) {
       throw new AppError(
-        `الملف يضيف ${newCodes.size} موظف جديد والمتبقي في اشتراك الشركة ${left} فقط. `
-          + 'لم يتم استيراد أي صف — راجع مدير المنصة لزيادة الحد.',
+        `الملف يضيف ${newCodes.size} موظف جديد والمتبقي في حصة الشركة/المجموعة ${left} فقط. `
+          + 'لم يتم استيراد أي صف — راجع مدير المنصة لزيادة الحد (يشمل حد الشركة الرئيسية إن وُجد).',
         400,
         EMPLOYEE_QUOTA_EXCEEDED,
       );

@@ -4,7 +4,8 @@ import { asyncHandler } from '../middlewares/asyncHandler';
 import { jsonRpcSuccess, biotimeOk, biotimeFail } from '../middlewares/jsonRpc';
 import { requireAuth, requirePlatformAdmin } from '../middlewares/auth';
 import { prisma, prismaBase } from '../prisma/client';
-import { hashPassword, userInfoJson } from '../services/auth.service';
+import { hashPassword, revokeUserSessions, userInfoJson } from '../services/auth.service';
+import { normalizeLoginInput, PASSWORD_MIN_LENGTH } from '../utils/loginValidation';
 import { sendUserCredentialsEmail } from '../services/mail.service';
 import { isLocationScopedHrRole } from '../services/userLocationScope.service';
 import { listFeatureGrants, setFeatureGrant, AUDIT_FEATURE } from '../services/auditLog.service';
@@ -47,7 +48,8 @@ router.post(
 
     const p = params(req);
     const name = String(p.name ?? p.new_user_name ?? '').trim();
-    const login = String(p.login ?? p.new_user_login ?? '').trim();
+    const loginRaw = String(p.login ?? p.new_user_login ?? '').trim();
+    const login = loginRaw ? normalizeLoginInput(loginRaw) : '';
     const password = String(p.password ?? p.new_user_password ?? '');
     const role = String(p.role ?? 'EMPLOYEE').toUpperCase() as UserRole;
     const locationIdRaw = p.locationId ?? p.location_id;
@@ -246,6 +248,7 @@ router.post(
       },
       include: { location: true },
     });
+    await revokeUserSessions(userId);
 
     const company = await prismaBase.company.findUnique({
       where: { id: companyId },
@@ -277,6 +280,60 @@ router.post(
         emailSent: emailResult.sent,
         emailTo: emailResult.to ?? null,
         emailError: emailResult.sent ? null : emailResult.error ?? null,
+      }),
+      req.rpcId,
+    );
+  }),
+);
+
+router.post(
+  '/users/set-password',
+  requireAuth,
+  requirePlatformAdmin,
+  asyncHandler(async (req, res) => {
+    const companyId = requireSelectedCompany(req);
+    if (!companyId) {
+      jsonRpcSuccess(res, biotimeFail('Select a company first', 'COMPANY_CONTEXT_REQUIRED'), req.rpcId);
+      return;
+    }
+    const p = params(req);
+    const userId = String(p.userId ?? p.id ?? '').trim();
+    const password = String(p.password ?? '').trim();
+    if (!userId) {
+      jsonRpcSuccess(res, biotimeFail('userId required', 'VALIDATION_ERROR'), req.rpcId);
+      return;
+    }
+    if (password.length < PASSWORD_MIN_LENGTH) {
+      jsonRpcSuccess(
+        res,
+        biotimeFail(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`, 'VALIDATION_ERROR'),
+        req.rpcId,
+      );
+      return;
+    }
+    const user = await prismaBase.user.findFirst({
+      where: { id: userId, companyId },
+      include: { location: true },
+    });
+    if (!user || user.role === UserRole.PLATFORM_ADMIN) {
+      jsonRpcSuccess(res, biotimeFail('User not found', 'NOT_FOUND'), req.rpcId);
+      return;
+    }
+    const updated = await prismaBase.user.update({
+      where: { id: userId },
+      data: {
+        passwordHash: await hashPassword(password),
+        initialPassword: password,
+      },
+      include: { location: true },
+    });
+    await revokeUserSessions(userId);
+    jsonRpcSuccess(
+      res,
+      biotimeOk({
+        user: { ...userInfoJson(updated), initialPassword: password },
+        password,
+        message: 'تم تحديث كلمة المرور',
       }),
       req.rpcId,
     );
