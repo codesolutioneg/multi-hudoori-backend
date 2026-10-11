@@ -142,6 +142,24 @@ router.post('/config/update', requireAuth, requireHrManager, asyncHandler(async 
     }
     data[field] = hours;
   }
+  for (const field of [
+    'punchReportMinLateCheckoutHours',
+    'punchReportMinEarlyCheckinHours',
+  ] as const) {
+    if (!(field in params)) continue;
+    const hours = Number(params[field]);
+    if (!Number.isFinite(hours) || hours < 0 || hours > 24) {
+      throw new AppError(`قيمة غير صالحة لـ ${field} (0–24 ساعة)`, 400, 'ACTION_ERROR');
+    }
+    data[field] = hours;
+  }
+  if ('punchReportCalendarDayFloorHour' in params) {
+    const hour = Math.round(Number(params.punchReportCalendarDayFloorHour));
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
+      throw new AppError('ساعة بداية يوم التقويم في تقرير البصمة لازم تكون من 0 لـ 23', 400, 'ACTION_ERROR');
+    }
+    data.punchReportCalendarDayFloorHour = hour;
+  }
 
   const updated = await prisma.bioTimeConfig.update({ where: { id: config.id }, data });
   if (Object.keys(data).length > 0) {

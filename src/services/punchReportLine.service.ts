@@ -4,6 +4,16 @@
  */
 import type { EmployeeProfile, EmployeeMapping, Shift, ShiftGridLine, Transaction } from '@prisma/client';
 import { prisma } from '../prisma/client';
+import { PUNCH_REPORT_CALENDAR_DAY_FLOOR_HOUR } from './punchReportWindow.service';
+export {
+  getPunchReportWindowSettings,
+  punchReportWindowFromConfig,
+  punchReportWindowConfigJson,
+  PUNCH_REPORT_CALENDAR_DAY_FLOOR_HOUR,
+  PUNCH_REPORT_MIN_EARLY_CHECKIN_HOURS,
+  PUNCH_REPORT_MIN_LATE_CHECKOUT_HOURS,
+  type PunchReportWindowSettings,
+} from './punchReportWindow.service';
 import { getEmployeeShiftForDate } from './shiftGridAssignment.service';
 import { earnedLeaveFromBaseDays } from './punchReport.service';
 import {
@@ -17,7 +27,7 @@ import {
   DEFAULT_LATE_CHECKOUT_HOURS,
   DEFAULT_EARLY_CHECKIN_HOURS,
 } from './shiftTime.service';
-import { loadManualOtKeySet } from './shiftGridManualOt.service';
+import { loadManualOtKeySet, loadManualOtKeySetForRange } from './shiftGridManualOt.service';
 import { payrollMonthRange } from './shiftGridMerge.service';
 import { wallClockHour } from '../utils/biotimeTimezone';
 import {
@@ -79,6 +89,7 @@ type ShiftInfo = {
   isExcluded: boolean;
   isBusDelay: boolean;
   isPresent: boolean;
+  isWorkInjury?: boolean;
 };
 
 type TxRow = Transaction & { employee?: EmpRow | null };
@@ -145,6 +156,41 @@ function nearestTo(punches: Date[], target: Date): Date {
   );
 }
 
+export type ResolveDayPunchesOptions = {
+  /**
+   * Punch-report only. Also include punches from this hour of the work date
+   * (Odoo treats 06:00 onward as that calendar day), even if they sit before
+   * the early-check-in window. A leftover 07:15 still loses to a real arrival
+   * inside the window.
+   */
+  calendarDayFloorHour?: number;
+};
+
+function earliestPunch(punches: Date[]): Date {
+  return punches.reduce((a, b) => (a.getTime() <= b.getTime() ? a : b));
+}
+
+function latestPunch(punches: Date[]): Date {
+  return punches.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b));
+}
+
+function preferredOrAll(side: Date[], preferredFloorMs: number): Date[] {
+  const preferred = side.filter((p) => p.getTime() >= preferredFloorMs);
+  return preferred.length ? preferred : side;
+}
+
+function workDateHourMs(expectedCheckIn: Date, hour: number): number {
+  return Date.UTC(
+    expectedCheckIn.getUTCFullYear(),
+    expectedCheckIn.getUTCMonth(),
+    expectedCheckIn.getUTCDate(),
+    hour,
+    0,
+    0,
+    0,
+  );
+}
+
 /**
  * Picks the day's check-in and check-out out of its punches.
  *
@@ -158,16 +204,27 @@ function nearestTo(punches: Date[], target: Date): Date {
  *
  * When both sides are represented the earliest check-in and latest check-out
  * still win, so genuine overtime and early leaves keep their real times.
+ *
+ * Punch-report path may pass `calendarDayFloorHour: 6` so a 6-hours-early
+ * punch (e.g. 10:00 for a 16:00 shift) still appears, matching Odoo, while a
+ * leftover morning punch still loses when a real in-window arrival exists.
  */
 export function resolveDayPunches(
   punchTimes: Date[],
   expectedCheckIn: Date,
   expectedCheckOut: Date,
   earlyCheckinHours = DEFAULT_EARLY_CHECKIN_HOURS,
+  options?: ResolveDayPunchesOptions,
 ): { checkIn: Date | null; checkOut: Date | null } {
   if (!punchTimes.length) return { checkIn: null, checkOut: null };
 
-  const earliestAllowed = expectedCheckIn.getTime() - Math.max(0, earlyCheckinHours) * 3600000;
+  const preferredFloorMs =
+    expectedCheckIn.getTime() - Math.max(0, earlyCheckinHours) * 3600000;
+  const calendarFloorMs =
+    options?.calendarDayFloorHour != null
+      ? workDateHourMs(expectedCheckIn, options.calendarDayFloorHour)
+      : preferredFloorMs;
+  const earliestAllowed = Math.min(preferredFloorMs, calendarFloorMs);
   // A day whose every punch predates the window still has to read as a punched
   // day, not an absence.
   const inWindow = punchTimes.filter((p) => p.getTime() >= earliestAllowed);
@@ -184,13 +241,15 @@ export function resolveDayPunches(
     else outSide.push(punch);
   }
 
+  const inPool = preferredOrAll(inSide, preferredFloorMs);
+
   if (inSide.length && outSide.length) {
     return {
-      checkIn: inSide.reduce((a, b) => (a.getTime() <= b.getTime() ? a : b)),
-      checkOut: outSide.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b)),
+      checkIn: earliestPunch(inPool),
+      checkOut: latestPunch(outSide),
     };
   }
-  if (inSide.length) return { checkIn: nearestTo(inSide, expectedCheckIn), checkOut: null };
+  if (inSide.length) return { checkIn: nearestTo(inPool, expectedCheckIn), checkOut: null };
   return { checkIn: null, checkOut: nearestTo(outSide, expectedCheckOut) };
 }
 
@@ -251,6 +310,9 @@ export function getPayableSummaryPeriodDays(
 }
 
 const BEFORE_HIRE_SHIFT = 'قبل التعيين';
+const EXCLUDED_SHIFT = 'عدم احتساب يوم';
+const WORK_INJURY_SHIFT = 'اصابه عمل';
+const WORK_INJURY_SHIFT_ALIASES = new Set(['اصابه عمل', 'إصابة عمل', 'اصابة عمل']);
 
 export function isBeforeHireMarkedDay(line: Pick<PunchReportExportLine, 'shiftName'>): boolean {
   return (line.shiftName ?? '').trim() === BEFORE_HIRE_SHIFT;
@@ -474,12 +536,23 @@ export function isAnnualLeaveDay(
   return line.isAnnualLeave === true || (line.shiftName ?? '').trim() === 'إجازة سنوية';
 }
 
+export function isExcludedDay(line: Pick<PunchReportExportLine, 'shiftName'>): boolean {
+  return (line.shiftName ?? '').trim() === EXCLUDED_SHIFT;
+}
+
+export function isWorkInjuryDay(line: Pick<PunchReportExportLine, 'shiftName'>): boolean {
+  return WORK_INJURY_SHIFT_ALIASES.has((line.shiftName ?? '').trim());
+}
+
 export function isRegularLeaveDay(
   line: Pick<PunchReportExportLine, 'isOffDay' | 'shiftName'> & { punchCount?: number },
 ): boolean {
   // A leave cell that still has fingerprints is worked time, not unpaid leave.
   if ((line.punchCount ?? 0) > 0) return false;
-  return line.isOffDay === true && (line.shiftName ?? '').trim() === 'إجازة';
+  if (line.isOffDay !== true) return false;
+  const name = (line.shiftName ?? '').trim();
+  // Work injury is rostered like weekly off: not absence, not sick.
+  return name === 'إجازة' || WORK_INJURY_SHIFT_ALIASES.has(name);
 }
 
 /** Regular «إجازة» after the first four days (chronological). */
@@ -516,6 +589,8 @@ function countNonWorkDays(lines: PunchReportExportLine[]): number {
   return lines.filter((l) => {
     const name = (l.shiftName ?? '').trim();
     if (isPresentMarkedDay(l) || isAnnualLeaveDay(l) || name === 'إجازة مرضية') return false;
+    // Excluded days drop out of عدد أيام العمل (the pay cut) but are not غياب بدون إذن.
+    if (isExcludedDay(l)) return true;
     return isRegularLeaveDay(l) || l.isAbsent || OUT_OF_SERVICE_SHIFT_NAMES.has(name);
   }).length;
 }
@@ -701,11 +776,32 @@ export type GeneratePunchReportLinesOptions = {
   deviceSns?: string[];
   /** Include archived/inactive employees (payroll needs their punches through the archive date). */
   includeInactive?: boolean;
+  /**
+   * Minimum hours after shift end that a next-morning punch may still close the
+   * previous day. Punch-report outputs only; payroll/attendance leave it unset.
+   */
+  minLateCheckoutHours?: number;
+  /**
+   * Minimum hours before shift start that a punch may still count as that day's
+   * check-in. Punch-report outputs only; payroll/attendance leave it unset.
+   */
+  minEarlyCheckinHours?: number;
+  /**
+   * Without a shiftGridId, still grant OT only on emp+day pairs listed in any
+   * grid's manual-OT lines (same days = excess/9 rule as grid reports).
+   */
+  manualOtOnly?: boolean;
+  /**
+   * Punch-report only. Calendar-day floor hour when pairing check-ins
+   * (Odoo treats punches from this hour on the work date as that day).
+   */
+  calendarDayFloorHour?: number;
 };
 
 function gridLineToShiftInfo(gl: (ShiftGridLine & { shift?: Shift | null }) | null): ShiftInfo {
   if (!gl) return { shift: null, isOff: false, isSick: false, isAnnual: false, isExcluded: false, isBusDelay: false, isPresent: false };
   if (gl.isExcluded) return { shift: null, isOff: false, isSick: false, isAnnual: false, isExcluded: true, isBusDelay: false, isPresent: false };
+  if (gl.isWorkInjury) return { shift: null, isOff: true, isSick: false, isAnnual: false, isExcluded: false, isBusDelay: false, isPresent: false, isWorkInjury: true };
   if (gl.isSick) return { shift: null, isOff: true, isSick: true, isAnnual: false, isExcluded: false, isBusDelay: false, isPresent: false };
   if (gl.isAnnualLeave) return { shift: null, isOff: false, isSick: false, isAnnual: true, isExcluded: false, isBusDelay: false, isPresent: false };
   if (gl.isOff) return { shift: null, isOff: true, isSick: false, isAnnual: false, isExcluded: false, isBusDelay: false, isPresent: false };
@@ -747,6 +843,11 @@ export async function generatePunchReportLines(
     config?.defaultEarlyCheckinHours != null && Number.isFinite(Number(config.defaultEarlyCheckinHours))
       ? Number(config.defaultEarlyCheckinHours)
       : DEFAULT_EARLY_CHECKIN_HOURS;
+  const earlyCheckinHoursFor = (shift: Parameters<typeof resolveEarlyCheckinHours>[0]) =>
+    Math.max(
+      resolveEarlyCheckinHours(shift, companyEarlyCheckinHours),
+      options.minEarlyCheckinHours ?? 0,
+    );
 
   const requestedCodes = [
     ...new Set(
@@ -850,7 +951,7 @@ export async function generatePunchReportLines(
     let p = 0;
     if (gl.shiftId || gl.shift) p += 20;
     if (gl.shift?.isOvernight) p += 5;
-    if (gl.isOff || gl.isSick || gl.isAnnualLeave || gl.isExcluded || gl.isPresent || gl.isResignation) {
+    if (gl.isOff || gl.isSick || gl.isAnnualLeave || gl.isExcluded || gl.isPresent || gl.isResignation || gl.isWorkInjury) {
       p += 10;
     }
     return p;
@@ -867,9 +968,12 @@ export async function generatePunchReportLines(
   const gridScoped = Boolean(options.shiftGridId);
   // Grid punch reports: OT only for manually listed emp+day pairs (days = excess/9).
   // Empty list ⇒ all OT zero. Non-grid reports keep automatic hour OT.
+  const manualOtScoped = gridScoped || options.manualOtOnly === true;
   const manualOtKeys = options.shiftGridId
     ? await loadManualOtKeySet(options.shiftGridId)
-    : null;
+    : options.manualOtOnly
+      ? await loadManualOtKeySetForRange(shiftContextFrom, fetchEnd, options.employeeIds)
+      : null;
 
   function resolveReportOt(
     employeeId: string | null | undefined,
@@ -877,7 +981,7 @@ export async function generatePunchReportLines(
     net: number,
     shiftH: number,
   ): number {
-    if (!gridScoped) return computeOvertimeHours(net, shiftH);
+    if (!manualOtScoped) return computeOvertimeHours(net, shiftH);
     if (!employeeId) return 0;
     if (!manualOtKeys!.has(`${employeeId}:${dateKey(workDate)}`)) return 0;
     return computeManualOtDays(net, shiftH);
@@ -936,8 +1040,11 @@ export async function generatePunchReportLines(
       const prev = getCachedShift(emp.id, new Date(calendarDate.getTime() - 86400000), termSn);
       const today = getCachedShift(emp.id, calendarDate, termSn);
 
-      const lateHours = resolveLateCheckoutHours(prev.shift, companyLateCheckoutHours);
-      const earlyHours = resolveEarlyCheckinHours(today.shift, companyEarlyCheckinHours);
+      const lateHours = Math.max(
+        resolveLateCheckoutHours(prev.shift, companyLateCheckoutHours),
+        options.minLateCheckoutHours ?? 0,
+      );
+      const earlyHours = earlyCheckinHoursFor(today.shift);
       const attribution = resolveOvernightMorningAttribution({
         punchHour: adjHour,
         prev,
@@ -1056,7 +1163,7 @@ export async function generatePunchReportLines(
           checkInCount: 0,
           checkOutCount: 0,
           shiftId: null,
-          shiftName: 'عدم احتساب يوم',
+          shiftName: EXCLUDED_SHIFT,
           expectedCheckIn: null,
           expectedCheckOut: null,
           lateMinutes: 0,
@@ -1064,7 +1171,7 @@ export async function generatePunchReportLines(
           netWorkedHours: 0,
           overtimeHours: 0,
           isOffDay: false,
-          isAbsent: true,
+          isAbsent: false,
           isAnnualLeave: false,
         }),
       );
@@ -1081,7 +1188,10 @@ export async function generatePunchReportLines(
     let overtimeHours = 0;
     const shift = info.shift;
 
-    if (info.isSick) {
+    if (info.isWorkInjury) {
+      shiftName = WORK_INJURY_SHIFT;
+      if (punchCount > 0) netWorkedHours = workedHours;
+    } else if (info.isSick) {
       shiftName = 'إجازة مرضية';
       if (punchCount > 0) netWorkedHours = workedHours;
     } else if (info.isAnnual) {
@@ -1098,7 +1208,13 @@ export async function generatePunchReportLines(
           wallPunches.map((p) => p.wall),
           expectedCheckIn,
           expectedCheckOut,
-          resolveEarlyCheckinHours(shift, companyEarlyCheckinHours),
+          earlyCheckinHoursFor(shift),
+          options.minEarlyCheckinHours != null
+            ? {
+                calendarDayFloorHour:
+                  options.calendarDayFloorHour ?? PUNCH_REPORT_CALENDAR_DAY_FLOOR_HOUR,
+              }
+            : undefined,
         );
         firstCheckIn = paired.checkIn;
         lastCheckOut = paired.checkOut;
@@ -1129,13 +1245,15 @@ export async function generatePunchReportLines(
 
     if (info.isPresent) shiftName = shiftName ? `حاضر - ${shiftName}` : 'حاضر';
 
-    const isOffDay = (info.isOff || info.isSick) && punchCount === 0;
+    const isOffDay = (info.isOff || info.isSick || Boolean(info.isWorkInjury)) && punchCount === 0;
     const isAbsent =
       punchCount === 0 &&
       !isOffDay &&
       !info.isAnnual &&
       !info.isPresent &&
-      shiftName !== 'إجازة سنوية';
+      !info.isExcluded &&
+      shiftName !== 'إجازة سنوية' &&
+      shiftName !== EXCLUDED_SHIFT;
 
     lines.push(
       makeLine({
@@ -1260,7 +1378,9 @@ export async function generatePunchReportLines(
     } else if (gl.isAnnualLeave) {
       pushGridLine('إجازة سنوية', { isAnnualLeave: true });
     } else if (gl.isExcluded) {
-      pushGridLine('عدم احتساب يوم', { isAbsent: true });
+      pushGridLine(EXCLUDED_SHIFT, { isAbsent: false });
+    } else if (gl.isWorkInjury) {
+      pushGridLine(WORK_INJURY_SHIFT, { isOffDay: true });
     }
   }
 
@@ -1417,7 +1537,7 @@ export async function generatePunchReportLines(
         continue;
       }
 
-      if (cached.isOff || cached.isSick || cached.isAnnual || cached.isExcluded) {
+      if (cached.isOff || cached.isSick || cached.isAnnual || cached.isExcluded || cached.isWorkInjury) {
         continue;
       }
 

@@ -169,6 +169,24 @@ export async function loadManualOtKeySet(gridId: string): Promise<Set<string>> {
   );
 }
 
+/** Manual-OT emp+day pairs from every grid (weekly or merged) inside the range. */
+export async function loadManualOtKeySetForRange(
+  dateFrom: Date,
+  dateTo: Date,
+  employeeIds?: string[] | null,
+): Promise<Set<string>> {
+  const rows = await prisma.shiftGridManualOtLine.findMany({
+    where: {
+      date: { gte: dateFrom, lte: dateTo },
+      ...(employeeIds?.length ? { employeeId: { in: employeeIds } } : {}),
+    },
+    select: { employeeId: true, date: true },
+  });
+  return new Set(
+    rows.map((r) => `${r.employeeId}:${r.date.toISOString().slice(0, 10)}`),
+  );
+}
+
 export async function addManualOtLine(params: {
   gridId: string;
   employeeId: string;

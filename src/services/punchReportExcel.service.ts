@@ -11,6 +11,7 @@ import {
   getIgnoredLateLineIds,
   type GeneratePunchReportLinesOptions,
 } from './punchReportLine.service';
+import { getPunchReportWindowSettings } from './punchReportWindow.service';
 import { exportFileResponse } from './payrollExport.service';
 import { getLatePolicy, lateDayFraction, type LatePolicy } from './latePolicy.service';
 import { getPayablePeriodPolicy, resolveFullPayrollPeriodDays, resolvePayablePeriodDays } from './payablePeriod.service';
@@ -188,6 +189,7 @@ function lineRowFormat(line: PunchReportExportLine): Partial<ExcelJS.Style> {
   if (line.isAnnualLeave) return annualFmt;
   if (isSickDay) return sickFmt;
   if (line.isOffDay) return offFmt;
+  if ((line.shiftName ?? '').trim() === 'عدم احتساب يوم') return absentFmt;
   if (line.isAbsent) return absentFmt;
   return cellFmt;
 }
@@ -421,7 +423,14 @@ export async function exportPunchReportXlsx(
     locationName?: string | null;
   },
 ): Promise<{ base64: string; filename: string; lineCount: number }> {
-  const lines = await generatePunchReportLines(options);
+  const window = await getPunchReportWindowSettings();
+  const lines = await generatePunchReportLines({
+    ...options,
+    minLateCheckoutHours: options.minLateCheckoutHours ?? window.minLateCheckoutHours,
+    minEarlyCheckinHours: options.minEarlyCheckinHours ?? window.minEarlyCheckinHours,
+    calendarDayFloorHour: options.calendarDayFloorHour ?? window.calendarDayFloorHour,
+    manualOtOnly: options.manualOtOnly ?? true,
+  });
   if (!lines.length) {
     throw new Error('لا توجد بصمات في الفترة المحددة');
   }

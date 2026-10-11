@@ -320,9 +320,10 @@ export function buildPayrollLineFromSummary(params: {
   const adminDays = round2(summary.adminPenalty || 0);
   const sickDays = round2(summary.sickDays || 0);
   const sickDedDays = round2(summary.sickDed || 0);
-  // Odoo: sick_day_count = sick_days × 0.25; sick money from sick_ded days.
-  const sickDayCount = sickDays > 0 ? round2(sickDays * 0.25) : 0;
-  const sickMoneyDays = sickDedDays > 0 ? sickDedDays : sickDayCount;
+  // «خصم الإجازة المرضية»: 1 = خصم يوم كامل. Fallback: أيام المرضي × 0.25 (Odoo).
+  const sickDayCount =
+    sickDedDays > 0 ? sickDedDays : sickDays > 0 ? round2(sickDays * 0.25) : 0;
+  const sickMoneyDays = sickDayCount;
 
   const lineBase = {
     payrollId,

@@ -193,7 +193,12 @@ router.post('/employees/punch-report-export-xlsx', requireAuth, requireHr, async
   }
 
   try {
-    const file = await exportPunchReportFileResponse({ dateFrom, dateTo, employeeIds });
+    const file = await exportPunchReportFileResponse({
+      dateFrom,
+      dateTo,
+      employeeIds,
+      includeInactive: true,
+    });
     jsonRpcSuccess(res, biotimeOk(file), req.rpcId);
   } catch (e: unknown) {
     jsonRpcSuccess(

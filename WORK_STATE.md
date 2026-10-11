@@ -13,6 +13,9 @@
 ## Daily log
 
 ### 2026-10-11
+- **Auto**: تصدير تقرير البصمات لموظفين محددين يمرّر `includeInactive: true` (مؤرشف يظهر ويُصدَّر). **MULTI**.
+- **Auto**: توحيد تقرير البصمة مع حضوري-dev + ديناميك: `punchReportLine`/`Excel`/`summary`/`import` + `loadManualOtKeySetForRange`؛ حقول إعدادات `punchReportMinLateCheckoutHours` (10) / `MinEarly` (5) / `CalendarDayFloorHour` (6)؛ migration `20261011160000`؛ UI إعدادات التأخير؛ deploy API+dashboard. **MULTI**.
+- **Auto**: مراجعة معادلات تقارير البصمة Multi vs حضوري-dev: cores متطابقة (`latePolicy`/`payablePeriod`/`shiftTime`/`punchReport`/`attendance`/`overtime`)؛ Multi متأخر في `punchReportLine` + Excel/summary (أرضية 10h/5h، floor 06:00، اختيار IN، اصابة عمل، عدم احتساب يوم، manualOtOnly) + فرق sick import. **MULTI**.
 - **Auto**: Migrate prod → `vicanza`: dump `biotime_2026-10-11_1156` → `biotime_mig_vicanza`؛ سكربت `migrateProdDumpToCompany.py --wipe`؛ 1351 emp / 15 users / 109k punches / 204 grids + configs؛ إصلاح dynamic import `companyGroupQuota.service.js` (BioTime sync). **MULTI**.
 - **Auto**: Child hire paths — `PARENT_QUOTA_EXCEEDED` كـ `AppError` + `fromCodedError` في errorHandler؛ `remainingEmployeeSeats` = min(حصة الشركة، حصة المجموعة) قبل Excel/shift-grid import؛ رسائل أوضح. **MULTI**.
 - **Auto**: Parent employee pool — مجموع حدود موظفي الفروع ≤ حد الرئيسية؛ منع «بلا حد» تحت رئيسية محدودة؛ رفض تخفيض حد الرئيسية تحت مجموع الفروع؛ `parentPool` في قائمة الشركات؛ اختبارات `companyGroupQuota` 5/5؛ deploy. **MULTI**.

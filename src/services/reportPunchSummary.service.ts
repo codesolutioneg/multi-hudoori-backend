@@ -18,6 +18,7 @@ import {
   type EmployeeSummaryRow,
   type PunchReportExportLine,
 } from './punchReportLine.service';
+import { getPunchReportWindowSettings } from './punchReportWindow.service';
 import { getLatePolicy } from './latePolicy.service';
 import { getPayablePeriodPolicy } from './payablePeriod.service';
 import { exportPunchReportFileResponse } from './punchReportExcel.service';
@@ -78,6 +79,7 @@ export async function buildPunchSummaryReport(
     options.dateTo,
   );
 
+  const window = await getPunchReportWindowSettings();
   const lines = await generatePunchReportLines({
     dateFrom: options.dateFrom,
     dateTo: options.dateTo,
@@ -86,6 +88,10 @@ export async function buildPunchSummaryReport(
     // `active` here would drop inactive-but-not-archived employees it selected,
     // leaving them as all-zero rows.
     includeInactive: true,
+    minLateCheckoutHours: window.minLateCheckoutHours,
+    minEarlyCheckinHours: window.minEarlyCheckinHours,
+    calendarDayFloorHour: window.calendarDayFloorHour,
+    manualOtOnly: true,
     ...(shiftGridId ? { shiftGridId } : {}),
   });
 

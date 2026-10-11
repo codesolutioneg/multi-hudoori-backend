@@ -367,7 +367,9 @@ export async function queuePunchReportExport(options: {
     const file = await exportPunchReportFileResponse({
       dateFrom: options.dateFrom,
       dateTo: options.dateTo,
-      ...(empCodes ? { empCodes, includeInactive: true } : { employeeIds }),
+      ...(empCodes
+        ? { empCodes, includeInactive: true }
+        : { employeeIds, includeInactive: true }),
     });
 
     await update(92, 'جاري حفظ الملف…');

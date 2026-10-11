@@ -683,6 +683,12 @@ model BioTimeConfig {
   defaultLateCheckoutHours     Float     @default(4) @map("default_late_checkout_hours")
   // Hours before next shift start counted as early check-in (caps overnight leave window).
   defaultEarlyCheckinHours     Float     @default(2) @map("default_early_checkin_hours")
+  /// Punch-report floor: min hours after shift end still counted as that day's checkout (Hudoori default 10).
+  punchReportMinLateCheckoutHours Float  @default(10) @map("punch_report_min_late_checkout_hours")
+  /// Punch-report floor: min hours before shift start still counted as that day's check-in (Hudoori default 5).
+  punchReportMinEarlyCheckinHours Float  @default(5) @map("punch_report_min_early_checkin_hours")
+  /// Punch-report: same-calendar-day punches from this hour onward stay on that work date (Odoo 06:00).
+  punchReportCalendarDayFloorHour Int    @default(6) @map("punch_report_calendar_day_floor_hour")
   createdAt                    DateTime  @default(now()) @map("created_at")
   updatedAt                    DateTime  @updatedAt @map("updated_at")
   company                      Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)

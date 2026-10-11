@@ -26,6 +26,7 @@ import { roundHours } from './shiftTime.service';
 import { employeeCustomFieldsJson } from './employeeProfileFields.service';
 import { latePolicyConfigJson } from './latePolicy.service';
 import { payablePeriodConfigJson } from './payablePeriod.service';
+import { punchReportWindowConfigJson } from './punchReportWindow.service';
 import { computePayrollExcelSummary } from './payrollExport.service';
 
 type EmployeeWithRelations = EmployeeProfile & {
@@ -200,6 +201,7 @@ export function configSettingsJson(
     loanNotificationEmailsEnabled: config.loanNotificationEmailsEnabled !== false,
     // Prefixed to stay unambiguous next to duplicateGraceMinutes.
     ...latePolicyConfigJson(config),
+    ...punchReportWindowConfigJson(config),
     payrollMonthStartDay: config.payrollMonthStartDay ?? 26,
     ...payablePeriodConfigJson(config),
     gridWeekStartDay: config.gridWeekStartDay ?? 0,
