@@ -324,29 +324,98 @@ function requestKindLabel(kind: string): string {
   return map[kind] ?? 'طلب';
 }
 
+function fmtMoneyAr(n: number): string {
+  const v = Math.round(n * 100) / 100;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+
+/** Short FCM body — totals only; full payslip opens in-app. */
+function buildPayrollConfirmedBody(params: {
+  periodFrom: string;
+  periodTo: string;
+  excelNet: number;
+  excelTotalDeductions: number;
+}): string {
+  return [
+    `الفترة: ${params.periodFrom} → ${params.periodTo} · الاستقطاعات: ${fmtMoneyAr(params.excelTotalDeductions)}`,
+    `صافي الراتب: ${fmtMoneyAr(params.excelNet)}`,
+  ].join('\n');
+}
+
 export async function notifyPayrollConfirmed(payrollId: string): Promise<void> {
   const companyId = requireCompanyId();
   const payroll = await prisma.payroll.findUnique({
     where: { id: payrollId },
     include: {
+      shiftGrid: { include: { location: { select: { name: true } } } },
       lines: {
-        include: { employee: { select: { userId: true, name: true } } },
+        include: {
+          employee: {
+            select: {
+              userId: true,
+              name: true,
+              code: true,
+              jobTitle: true,
+              basicSalary: true,
+              insuranceSalary: true,
+              medicalInsuranceSalary: true,
+              department: { select: { name: true } },
+              workLocation: { select: { name: true } },
+            },
+          },
+        },
+        orderBy: { sequence: 'asc' },
       },
     },
   });
   if (!payroll) return;
+
   const periodFrom = payroll.dateFrom.toISOString().slice(0, 10);
   const periodTo = payroll.dateTo.toISOString().slice(0, 10);
-  for (const line of payroll.lines) {
+  const { getPayslipValues } = await import('./payrollExport.service');
+  const payrollForValues = {
+    id: payroll.id,
+    name: payroll.name,
+    dateFrom: payroll.dateFrom,
+    dateTo: payroll.dateTo,
+    shiftGridId: payroll.shiftGridId,
+    shiftGrid: payroll.shiftGrid,
+    lines: payroll.lines,
+  };
+
+  for (const [idx, line] of payroll.lines.entries()) {
     const userId = line.employee?.userId;
     if (!userId) continue;
-    const net = line.netSalary ?? 0;
+
+    // Only push when the employee has registered an FCM device token.
+    const user = await prismaBase.user.findUnique({
+      where: { id: userId },
+      select: { fcmToken: true },
+    });
+    if (!user?.fcmToken?.trim()) continue;
+
+    let body: string;
+    let net = line.netSalary ?? 0;
+    try {
+      const values = getPayslipValues(line as never, payrollForValues as never, line.sequence || idx + 1);
+      net = values.excelNet;
+      body = buildPayrollConfirmedBody({
+        periodFrom,
+        periodTo,
+        excelNet: values.excelNet,
+        excelTotalDeductions: values.excelTotalDeductions,
+      });
+    } catch (err) {
+      logger.warn({ err, payrollId, lineId: line.id }, 'Payslip body for FCM failed; using summary');
+      body = `الفترة: ${periodFrom} → ${periodTo}\nصافي الراتب: ${fmtMoneyAr(net)}`;
+    }
+
     await notifyUser({
       companyId,
       userId,
       type: 'payroll_confirmed',
       title: 'تم اعتماد راتبك',
-      body: `الفترة ${periodFrom} → ${periodTo} — صافي ${net.toFixed(2)}`,
+      body,
       data: {
         payrollId,
         payrollLineId: line.id,

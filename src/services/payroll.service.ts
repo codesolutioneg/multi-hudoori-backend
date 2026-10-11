@@ -750,6 +750,10 @@ export async function exportFawry(payrollId: string): Promise<{ base64: string; 
   return exportFawryXlsx(payrollId);
 }
 
+/**
+ * Employee self-service payslips: confirmed runs only (approved / paid periods).
+ * Returns newest-first history so the mobile app can filter by month.
+ */
 export async function myPayroll(userId: string) {
   const profile = await prisma.employeeProfile.findFirst({ where: { userId } });
   if (!profile) return [];
@@ -757,16 +761,17 @@ export async function myPayroll(userId: string) {
   const lines = await prisma.payrollLine.findMany({
     where: {
       employeeId: profile.id,
-      payroll: { state: { in: [PayrollState.calculated, PayrollState.confirmed] } },
+      payroll: { state: PayrollState.confirmed },
     },
     include: { payroll: true, employee: { include: { department: true, workLocation: true } } },
     orderBy: { payroll: { dateTo: 'desc' } },
-    take: 24,
+    take: 120,
   });
 
   return lines.map((l) => {
     const dateFrom = l.payroll.dateFrom.toISOString().slice(0, 10);
     const dateTo = l.payroll.dateTo.toISOString().slice(0, 10);
+    const monthKey = dateTo.slice(0, 7); // YYYY-MM of period end
     const line = payrollLineJson(l);
     return {
       payrollId: l.payrollId,
@@ -776,10 +781,12 @@ export async function myPayroll(userId: string) {
       dateTo,
       periodFrom: dateFrom,
       periodTo: dateTo,
+      monthKey,
       state: l.payroll.state,
       netSalary: l.netSalary,
       grossSalary: l.grossSalary,
       employeeName: l.employee?.name ?? '',
+      lineId: l.id,
       line,
     };
   });

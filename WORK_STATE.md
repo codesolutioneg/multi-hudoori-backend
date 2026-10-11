@@ -13,6 +13,8 @@
 ## Daily log
 
 ### 2026-10-11
+- **Auto**: FCM تأكيد الراتب — جسم الإشعار سطرين totals فقط (فترة + استقطاعات / صافي)؛ التفاصيل من التطبيق/payslip. **MULTI**.
+- **Auto**: تأكيد المسير — FCM منظم لكل موظف معه توكن (تفاصيل قسيمة) ؛ `myPayroll` = confirmed فقط + `monthKey` حتى 120 شهر. **MULTI**.
 - **Auto**: تصدير تقرير البصمات لموظفين محددين يمرّر `includeInactive: true` (مؤرشف يظهر ويُصدَّر). **MULTI**.
 - **Auto**: توحيد تقرير البصمة مع حضوري-dev + ديناميك: `punchReportLine`/`Excel`/`summary`/`import` + `loadManualOtKeySetForRange`؛ حقول إعدادات `punchReportMinLateCheckoutHours` (10) / `MinEarly` (5) / `CalendarDayFloorHour` (6)؛ migration `20261011160000`؛ UI إعدادات التأخير؛ deploy API+dashboard. **MULTI**.
 - **Auto**: مراجعة معادلات تقارير البصمة Multi vs حضوري-dev: cores متطابقة (`latePolicy`/`payablePeriod`/`shiftTime`/`punchReport`/`attendance`/`overtime`)؛ Multi متأخر في `punchReportLine` + Excel/summary (أرضية 10h/5h، floor 06:00، اختيار IN، اصابة عمل، عدم احتساب يوم، manualOtOnly) + فرق sick import. **MULTI**.
