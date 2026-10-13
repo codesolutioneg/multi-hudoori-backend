@@ -486,7 +486,7 @@ describe('xlsx exports', () => {
       const payroll = await prisma.payroll.create({
         data: { name: 'Pdf payroll', dateFrom: new Date('2026-06-01'), dateTo: new Date('2026-06-30') },
       });
-      await prisma.payrollLine.create({
+      const line = await prisma.payrollLine.create({
         data: {
           payrollId: payroll.id,
           employeeId: employee.id,
@@ -504,15 +504,18 @@ describe('xlsx exports', () => {
 
       const res = await rpc(
         '/api/biotime/payroll/payslip/pdf',
-        { payrollId: payroll.id, employeeId: employee.id },
+        { lineId: line.id },
         hr.token,
       );
       // PDF rendering needs a Chromium download; accept a clean failure here but
       // never a crash, and assert the payload shape when it does render.
       expect(res.body.result).toBeDefined();
       if (res.body.result?.success) {
-        const base64 = String(res.body.result.data?.file ?? res.body.result.data?.base64 ?? '');
+        const data = res.body.result.data ?? {};
+        const base64 = String(data.file ?? data.base64 ?? '');
         expect(Buffer.from(base64, 'base64').subarray(0, 4).toString()).toBe('%PDF');
+        expect(data.mimeType).toBe('application/pdf');
+        expect(String(data.filename)).toMatch(/^payslip_.*_2026-06\.pdf$/);
       }
     }, 120000);
   });

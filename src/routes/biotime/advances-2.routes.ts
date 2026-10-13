@@ -17,7 +17,10 @@ import {
 } from "../../services/payrollExport.service";
 import { writeAudit } from "../../services/auditLog.service";
 import { prisma } from "../../prisma/client";
-import { sendLoanImportNotifications } from "../../services/loanImportNotification.service";
+import {
+  queueLoanImportNotifications,
+  sendLoanImportNotifications,
+} from "../../services/loanImportNotification.service";
 import * as odooLoanAccounts from "../../services/odoo/odooLoanAccounts.service";
 
 const router = Router();
@@ -253,22 +256,7 @@ router.post(
       throw new AppError("معرّف الاستيراد مطلوب", 400, "VALIDATION_ERROR");
     const result =
       await odooLoanAccounts.sendLoanImportToOdooAccounts(importId);
-    let email;
-    try {
-      email = await sendLoanImportNotifications(importId);
-    } catch (error) {
-      email = {
-        sent: false,
-        sentBranches: 0,
-        sentRecipients: [],
-        failures: [
-          {
-            branchName: "غير محدد",
-            error: error instanceof Error ? error.message : String(error),
-          },
-        ],
-      };
-    }
+    const email = queueLoanImportNotifications(importId);
     const response = { ...result, email };
     await writeAudit({
       req,

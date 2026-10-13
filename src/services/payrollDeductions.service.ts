@@ -1,5 +1,6 @@
 import { DeductionState, Payroll, PayrollLine, PayrollState, Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
+import { NotFoundError } from '../utils/errors';
 import { recalculatePayrollLineTotals, refreshPayrollHeaderTotals } from './payrollLine.service';
 
 /** Odoo biotime_payroll/models/payroll_deductions.py DEDUCTION_TYPE_FIELD */
@@ -83,7 +84,7 @@ export async function linkDeductionsToPayroll(
   options?: { allowConfirmed?: boolean },
 ): Promise<{ linked: number; skipped: number }> {
   const payroll = await prisma.payroll.findUnique({ where: { id: payrollId } });
-  if (!payroll) throw new Error('Payroll not found');
+  if (!payroll) throw new NotFoundError('Payroll not found', 'NOT_FOUND');
   if (payroll.state === 'confirmed' && !options?.allowConfirmed) {
     throw new Error('لا يمكن تعديل كشف رواتب مؤكد');
   }

@@ -4,7 +4,7 @@ import { UserRole } from '@prisma/client';
 import { prisma } from '../../src/prisma/client';
 
 vi.mock('../../src/services/mail.service', () => ({
-  sendUserCredentialsEmail: vi.fn(async () => ({ sent: false, error: 'NO_EMAIL', to: null })),
+  queueUserCredentialsEmail: vi.fn(() => ({ queued: false, error: 'NO_EMAIL', to: null })),
   sendHiringAppointmentEmail: vi.fn(async () => ({ sent: false, error: 'NO_EMAIL', to: null })),
 }));
 

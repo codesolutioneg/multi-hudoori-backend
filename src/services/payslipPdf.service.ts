@@ -6,21 +6,42 @@ import path from 'path';
 import puppeteer from 'puppeteer';
 import { prisma } from '../prisma/client';
 import { NotFoundError } from '../utils/errors';
-import { getPayslipValues } from './payrollExport.service';
-import { exportFileResponse } from './payrollExport.service';
+import {
+  exportFileResponse,
+  getPayslipValues,
+  sanitizePayrollFilenamePart,
+} from './payrollExport.service';
 
-const FONT_PATH = path.resolve(__dirname, '../../assets/fonts/NotoSansArabic-Regular.ttf');
+/** Bundled biotime routes change `__dirname`; resolve from cwd (PM2 backend root). */
+function resolveArabicFontPath(): string {
+  const candidates = [
+    path.join(process.cwd(), 'assets/fonts/NotoSansArabic-Regular.ttf'),
+    path.resolve(__dirname, '../../assets/fonts/NotoSansArabic-Regular.ttf'),
+    path.resolve(__dirname, '../../../assets/fonts/NotoSansArabic-Regular.ttf'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
+}
 
 let fontBase64Cache: string | null = null;
 
 function getFontBase64(): string {
   if (!fontBase64Cache) {
-    if (!fs.existsSync(FONT_PATH)) {
-      throw new Error(`Arabic font missing at ${FONT_PATH}`);
+    const fontPath = resolveArabicFontPath();
+    if (!fs.existsSync(fontPath)) {
+      throw new Error(`Arabic font missing at ${fontPath}`);
     }
-    fontBase64Cache = fs.readFileSync(FONT_PATH).toString('base64');
+    fontBase64Cache = fs.readFileSync(fontPath).toString('base64');
   }
   return fontBase64Cache;
+}
+
+function payslipFilename(employeeName: string, employeeCode: string | null | undefined, date: Date): string {
+  const name = sanitizePayrollFilenamePart(employeeName || String(employeeCode || 'emp'));
+  const ym = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+  return `payslip_${name}_${ym}.pdf`;
 }
 
 function escapeHtml(value: string): string {
@@ -168,8 +189,9 @@ export async function generatePayslipPdf(lineId: string) {
   const values = getPayslipValues(line, payroll, line.sequence || 1);
   const html = buildPayslipHtml(values, line.payroll.name ?? '');
   const base64 = await htmlToPdfBase64(html);
-  const code = String(line.employeeCode || 'emp').replace(/\//g, '_');
-  return exportFileResponse(base64, `payslip_${code}.pdf`.replace(/[^\w.-]/g, '_'));
+  const periodDate = line.payroll.dateTo || line.payroll.dateFrom;
+  const filename = payslipFilename(values.employeeName, line.employeeCode, periodDate);
+  return exportFileResponse(base64, filename, 'application/pdf');
 }
 
 export async function generateAllPayslipsPdf(payrollId: string) {
@@ -212,8 +234,10 @@ export async function generateAllPayslipsPdf(payrollId: string) {
   </style></head><body>${parts.join('')}</body></html>`;
 
   const base64 = await htmlToPdfBase64(fullHtml);
-  const name = (payroll.name || 'payroll').replace(/\//g, '_');
-  return exportFileResponse(base64, `payslips_${name}.pdf`);
+  const name = sanitizePayrollFilenamePart(payroll.name || 'payroll');
+  const periodDate = payroll.dateTo || payroll.dateFrom;
+  const ym = `${periodDate.getUTCFullYear()}-${String(periodDate.getUTCMonth() + 1).padStart(2, '0')}`;
+  return exportFileResponse(base64, `payslips_${name}_${ym}.pdf`, 'application/pdf');
 }
 
 export { exportFileResponse };

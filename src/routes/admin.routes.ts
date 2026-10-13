@@ -6,7 +6,7 @@ import { requireAuth, requirePlatformAdmin } from '../middlewares/auth';
 import { prisma, prismaBase } from '../prisma/client';
 import { hashPassword, revokeUserSessions, userInfoJson } from '../services/auth.service';
 import { normalizeLoginInput, PASSWORD_MIN_LENGTH } from '../utils/loginValidation';
-import { sendUserCredentialsEmail } from '../services/mail.service';
+import { queueUserCredentialsEmail } from '../services/mail.service';
 import { isLocationScopedHrRole } from '../services/userLocationScope.service';
 import { listFeatureGrants, setFeatureGrant, AUDIT_FEATURE } from '../services/auditLog.service';
 import {
@@ -128,7 +128,7 @@ router.post(
       });
     }
 
-    const emailResult = await sendUserCredentialsEmail({
+    const emailResult = queueUserCredentialsEmail({
       name,
       login,
       email: user.email,
@@ -137,8 +137,8 @@ router.post(
       kind: 'welcome',
     });
 
-    const message = emailResult.sent
-      ? `تم إنشاء المستخدم وإرسال بيانات الدخول إلى ${emailResult.to}`
+    const message = emailResult.queued
+      ? `تم إنشاء المستخدم — جاري إرسال بيانات الدخول إلى ${emailResult.to}`
       : emailResult.error === 'NO_EMAIL'
         ? 'User created (no email on login — credentials email skipped)'
         : `User created (email not sent: ${emailResult.error ?? 'unknown'})`;
@@ -148,9 +148,10 @@ router.post(
       biotimeOk({
         user: userInfoJson(user),
         message,
-        emailSent: emailResult.sent,
+        emailSent: emailResult.queued,
+        emailQueued: emailResult.queued,
         emailTo: emailResult.to ?? null,
-        emailError: emailResult.sent ? null : emailResult.error ?? null,
+        emailError: emailResult.queued ? null : emailResult.error ?? null,
       }),
       req.rpcId,
     );
@@ -255,7 +256,7 @@ router.post(
       select: { code: true, name: true },
     });
 
-    const emailResult = await sendUserCredentialsEmail({
+    const emailResult = queueUserCredentialsEmail({
       name: updated.name,
       login: updated.login,
       email: updated.email,
@@ -267,8 +268,8 @@ router.post(
       subject: 'حضوري — بيانات الدخول الجديدة',
     });
 
-    const message = emailResult.sent
-      ? `تم إعادة تعيين كلمة المرور وإرسالها إلى ${emailResult.to}`
+    const message = emailResult.queued
+      ? `تم إعادة تعيين كلمة المرور — جاري الإرسال إلى ${emailResult.to}`
       : `Password reset (email not sent: ${emailResult.error ?? 'unknown'})`;
 
     jsonRpcSuccess(
@@ -277,9 +278,10 @@ router.post(
         user: { ...userInfoJson(updated), initialPassword: password },
         password,
         message,
-        emailSent: emailResult.sent,
+        emailSent: emailResult.queued,
+        emailQueued: emailResult.queued,
         emailTo: emailResult.to ?? null,
-        emailError: emailResult.sent ? null : emailResult.error ?? null,
+        emailError: emailResult.queued ? null : emailResult.error ?? null,
       }),
       req.rpcId,
     );

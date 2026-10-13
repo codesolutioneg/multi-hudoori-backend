@@ -246,6 +246,67 @@ export async function createLocation(overrides: Record<string, unknown> = {}) {
 }
 
 /** Open shift grid covering a date range so leave/shift-change approve can fulfill. */
+export type MobileRoleTrio = {
+  employee: SeededUser;
+  hr: SeededUser;
+  branchManager: SeededUser;
+  locationId: string;
+  shiftId: string;
+};
+
+/** EMPLOYEE + HR_MANAGER + BRANCH_MANAGER with location punch + shift for mobile E2E. */
+export async function seedMobileRoleTrio(): Promise<MobileRoleTrio> {
+  await ensureBioTimeConfig();
+  const companyId = await ensureDefaultCompany();
+  const location = await createLocation({
+    companyId,
+    name: 'Mobile Branch',
+    code: 'MOB-BR',
+    locationPunchEnabled: true,
+    latitude: 30.0444,
+    longitude: 31.2357,
+    geofenceRadiusMeters: 200,
+  });
+  const shift = await createShift({ companyId, name: 'Day', code: 'DAY-SURF' });
+
+  const employee = await createUser({
+    login: 'mobile-emp@test.local',
+    role: UserRole.EMPLOYEE,
+    locationId: location.id,
+    companyId,
+    withEmployeeProfile: true,
+    employee: { code: 'MEMP1', name: 'Mobile Emp', locationId: location.id },
+  });
+
+  const hr = await createUser({
+    login: 'mobile-hr@test.local',
+    role: UserRole.HR_MANAGER,
+    companyId,
+  });
+
+  const branchManager = await createUser({
+    login: 'mobile-bm@test.local',
+    role: UserRole.BRANCH_MANAGER,
+    locationId: location.id,
+    companyId,
+    withEmployeeProfile: true,
+    employee: { code: 'MBM1', name: 'Mobile BM', locationId: location.id },
+  });
+
+  await prismaBase.location.update({
+    where: { id: location.id },
+    data: { managerEmployeeId: branchManager.employeeId ?? null },
+  });
+
+  return {
+    employee,
+    hr,
+    branchManager,
+    locationId: location.id,
+    shiftId: shift.id,
+  };
+}
+
 export async function seedShiftGridForEmployee(opts: {
   companyId: string;
   employeeId: string;

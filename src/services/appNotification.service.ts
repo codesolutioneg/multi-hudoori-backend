@@ -286,6 +286,8 @@ export async function notifyEmployeeRequestDecision(params: {
   requestKind: string;
   requestId: string;
   detail?: string;
+  title?: string;
+  rejectionReason?: string | null;
 }): Promise<void> {
   const companyId = requireCompanyId();
   const employee = await prisma.employeeProfile.findUnique({
@@ -294,10 +296,16 @@ export async function notifyEmployeeRequestDecision(params: {
   });
   if (!employee?.userId) return;
   const kindLabel = requestKindLabel(params.requestKind);
-  const title = params.approved ? `تمت الموافقة على طلبك` : `تم رفض طلبك`;
-  const body = params.detail?.trim()
+  const title =
+    params.title?.trim() ||
+    (params.approved ? `تمت الموافقة على طلبك` : `تم رفض طلبك`);
+  let body = params.detail?.trim()
     ? `${kindLabel}: ${params.detail}`
     : kindLabel;
+  const reason = params.rejectionReason?.trim();
+  if (!params.approved && reason) {
+    body = `${body}\nالسبب: ${reason}`;
+  }
   await notifyUser({
     companyId,
     userId: employee.userId,
@@ -320,6 +328,7 @@ function requestKindLabel(kind: string): string {
     salary: 'طلب راتب',
     certificate: 'طلب شهادة',
     attendanceEdit: 'طلب تعديل حضور',
+    advance: 'طلب سلفة',
   };
   return map[kind] ?? 'طلب';
 }

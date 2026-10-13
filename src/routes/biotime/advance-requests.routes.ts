@@ -27,6 +27,7 @@ import {
   rejectAdvanceRequest,
   type Actor,
 } from '../../services/advanceRequest.service';
+import * as requestNotify from '../../services/requestNotificationSideEffects';
 
 const router = Router();
 
@@ -115,6 +116,7 @@ router.post('/advance-requests/branch-approve', requireAuth, asyncHandler(async 
   const params = p(req);
   await guard(res, req.rpcId, async () => {
     const request = await branchApproveAdvanceRequest(actorOf(req), String(params.id ?? ''));
+    requestNotify.notifyAdvanceDecision(request, 'branch_approved');
     await writeAudit({
       req,
       module: 'advances',
@@ -136,6 +138,7 @@ router.post('/advance-requests/approve', requireAuth, asyncHandler(async (req, r
       limitOverride: params.limitOverride === true,
       overrideReason: params.overrideReason != null ? String(params.overrideReason) : null,
     });
+    requestNotify.notifyAdvanceDecision(request, 'approved');
     await writeAudit({
       req,
       module: 'advances',
@@ -156,6 +159,7 @@ router.post('/advance-requests/reject', requireAuth, asyncHandler(async (req, re
       String(params.id ?? ''),
       String(params.reason ?? ''),
     );
+    requestNotify.notifyAdvanceDecision(request, 'rejected');
     await writeAudit({
       req,
       module: 'advances',

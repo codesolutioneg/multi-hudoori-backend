@@ -39,14 +39,18 @@ router.post('/config/sync-devices', requireAuth, requireHrManager, asyncHandler(
 }));
 
 router.post('/config/sync-transactions', requireAuth, requireHr, asyncHandler(async (req, res) => {
-  const params = p(req);
-  const dateFrom = params.dateFrom ? new Date(String(params.dateFrom)) : undefined;
-  const dateTo = params.dateTo ? new Date(String(params.dateTo)) : undefined;
-  const count = dateFrom || dateTo
-    ? await syncService.syncTransactions(dateFrom, dateTo)
-    : await syncService.syncTransactionsIncremental();
-  const config = await getConfig();
-  jsonRpcSuccess(res, biotimeOk({ config: await configSettingsWithCounts(config), message: `تمت المزامنة: ${count} سجل`, count }), req.rpcId);
+  try {
+    const params = p(req);
+    const dateFrom = params.dateFrom ? new Date(String(params.dateFrom)) : undefined;
+    const dateTo = params.dateTo ? new Date(String(params.dateTo)) : undefined;
+    const count = dateFrom || dateTo
+      ? await syncService.syncTransactions(dateFrom, dateTo)
+      : await syncService.syncTransactionsIncremental();
+    const config = await getConfig();
+    jsonRpcSuccess(res, biotimeOk({ config: await configSettingsWithCounts(config), message: `تمت المزامنة: ${count} سجل`, count }), req.rpcId);
+  } catch (e: unknown) {
+    jsonRpcSuccess(res, biotimeFail(e instanceof Error ? e.message : 'Sync failed', 'ACTION_ERROR'), req.rpcId);
+  }
 }));
 
 router.post('/config/sync-all', requireAuth, requireHrManager, asyncHandler(async (req, res) => {

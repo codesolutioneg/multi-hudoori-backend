@@ -19,6 +19,49 @@ async function employeeForUser(userId: string) {
   return profile;
 }
 
+function dateKey(raw: string): string {
+  return String(raw).trim().slice(0, 10);
+}
+
+function assertValidDateOrder(dateFrom: string, dateTo: string): void {
+  if (dateKey(dateTo) < dateKey(dateFrom)) {
+    throw new AppError(
+      'تاريخ النهاية يجب أن يكون بعد تاريخ البداية أو يساويه',
+      400,
+      'INVALID_DATE_RANGE',
+    );
+  }
+}
+
+/** Leave may extend past openCycle.dateTo; only the start must not precede the cycle. */
+async function assertLeaveDateFromInOpenCycle(dateFrom: string): Promise<OpenCycle> {
+  const cycle = await getOpenCycle();
+  if (dateKey(dateFrom) < cycle.dateFrom) {
+    throw new AppError(
+      `لا يمكن أن تبدأ الإجازة قبل بداية الدورة المفتوحة (${cycle.dateFrom})`,
+      400,
+      'BEFORE_OPEN_CYCLE',
+    );
+  }
+  return cycle;
+}
+
+/** Shift change / attendance edit must lie entirely inside the open cycle. */
+async function assertDatesInsideOpenCycle(dateFrom: string, dateTo: string): Promise<OpenCycle> {
+  assertValidDateOrder(dateFrom, dateTo);
+  const cycle = await getOpenCycle();
+  const from = dateKey(dateFrom);
+  const to = dateKey(dateTo);
+  if (from < cycle.dateFrom || to > cycle.dateTo) {
+    throw new AppError(
+      `اختر تواريخ داخل الدورة المفتوحة فقط (${cycle.dateFrom} → ${cycle.dateTo})`,
+      400,
+      'OUTSIDE_OPEN_CYCLE',
+    );
+  }
+  return cycle;
+}
+
 export function leaveRequestJson(r: {
   id: string;
   leaveType: string;
@@ -108,8 +151,11 @@ export async function createLeaveRequest(userId: string, data: {
   reason: string;
 }) {
   const employee = await employeeForUser(userId);
+  assertValidDateOrder(data.dateFrom, data.dateTo);
+  await assertLeaveDateFromInOpenCycle(data.dateFrom);
   const dates = enumerateUtcDates(new Date(data.dateFrom), new Date(data.dateTo));
   await assertDatesNotPeriodLocked(employee.id, dates);
+  // Grid coverage is enforced on HR approve (fulfillment), not on create.
   return prisma.leaveRequest.create({
     data: {
       companyId: employee.companyId,
@@ -151,8 +197,10 @@ export async function createShiftChangeRequest(userId: string, data: {
   reason: string;
 }) {
   const employee = await employeeForUser(userId);
+  await assertDatesInsideOpenCycle(data.dateFrom, data.dateTo);
   const dates = enumerateUtcDates(new Date(data.dateFrom), new Date(data.dateTo));
   await assertDatesNotPeriodLocked(employee.id, dates);
+  // Grid coverage is enforced on HR approve (fulfillment), not on create.
   return prisma.shiftChangeRequest.create({
     data: {
       companyId: employee.companyId,
@@ -238,6 +286,7 @@ export async function createAttendanceEditRequest(userId: string, data: {
   date: string; requestedCheckIn?: string; requestedCheckOut?: string; reason: string;
 }) {
   const employee = await employeeForUser(userId);
+  await assertDatesInsideOpenCycle(data.date, data.date);
   const day = new Date(data.date);
   await assertDatesNotPeriodLocked(employee.id, [day]);
   return prisma.attendanceEditRequest.create({

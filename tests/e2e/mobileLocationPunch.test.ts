@@ -246,4 +246,36 @@ describe('mobile location punch e2e', () => {
     expect(loc.latitude).toBe(24.7);
     expect(loc.geofenceRadiusMeters).toBe(150);
   });
+
+  it('rejects duplicate check-in (ALREADY_CHECKED_IN)', async () => {
+    const seeded = await seedCompanyWithPunchBranch({
+      code: 'dupco',
+      enabled: true,
+      lat: 30.0444,
+      lng: 31.2357,
+    });
+    const login = expectOk(
+      await rpc('/api/auth/login', {
+        companyCode: 'dupco',
+        login: seeded.login,
+        password: seeded.password,
+      }),
+    );
+    const token = String(login.token);
+    expectOk(
+      await rpc(
+        '/api/biotime/mobile-punch/check-in',
+        { latitude: 30.0444, longitude: 31.2357 },
+        token,
+      ),
+    );
+    expectFail(
+      await rpc(
+        '/api/biotime/mobile-punch/check-in',
+        { latitude: 30.0444, longitude: 31.2357 },
+        token,
+      ),
+      'ALREADY_CHECKED_IN',
+    );
+  });
 });

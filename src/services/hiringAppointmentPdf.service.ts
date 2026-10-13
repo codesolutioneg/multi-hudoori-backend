@@ -6,7 +6,18 @@ import type { HiringAppointment, Location } from '@prisma/client';
 import { readCompanyLogoDataUri } from './companyLogo.service';
 import { requireCompanyId } from '../tenant/context';
 
-const FONT_PATH = path.resolve(__dirname, '../../assets/fonts/NotoSansArabic-Regular.ttf');
+/** Bundled biotime routes change `__dirname`; resolve from cwd (PM2 backend root). */
+function resolveArabicFontPath(): string {
+  const candidates = [
+    path.join(process.cwd(), 'assets/fonts/NotoSansArabic-Regular.ttf'),
+    path.resolve(__dirname, '../../assets/fonts/NotoSansArabic-Regular.ttf'),
+    path.resolve(__dirname, '../../../assets/fonts/NotoSansArabic-Regular.ttf'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
+}
 
 function uploadRoot(): string {
   return path.join(process.cwd(), 'uploads', requireCompanyId(), 'hiring-appointments');
@@ -18,10 +29,11 @@ let fontBase64Cache: string | null = null;
 
 function getFontBase64(): string {
   if (!fontBase64Cache) {
-    if (!fs.existsSync(FONT_PATH)) {
-      throw new Error(`Arabic font missing at ${FONT_PATH}`);
+    const fontPath = resolveArabicFontPath();
+    if (!fs.existsSync(fontPath)) {
+      throw new Error(`Arabic font missing at ${fontPath}`);
     }
-    fontBase64Cache = fs.readFileSync(FONT_PATH).toString('base64');
+    fontBase64Cache = fs.readFileSync(fontPath).toString('base64');
   }
   return fontBase64Cache;
 }

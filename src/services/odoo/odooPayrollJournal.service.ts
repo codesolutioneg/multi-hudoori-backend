@@ -18,6 +18,7 @@ import {
 } from './payrollJournalAmounts';
 import { sendPayrollJournalSummaryEmail } from '../mail.service';
 import { isLoanNotificationEmailEnabled } from '../notificationEmail.service';
+import { logger } from '../../utils/logger';
 import {
   replaceOdooJournalAttachmentsWithHudooriExports,
   syncOdooHrEmployeesForPayroll,
@@ -777,8 +778,9 @@ export async function sendPayrollJournalToOdoo(payrollId: string): Promise<{
   }
 
   const debitLbl = debitLabel(branch, analytic);
-  const email = await sendPayrollJournalSummaryEmail({
-    recipients: branchNotificationEmails(payroll),
+  const emailRecipients = branchNotificationEmails(payroll);
+  const emailPayload = {
+    recipients: emailRecipients,
     branchName: branch || 'فرع غير محدد',
     payrollName: payroll.name || displayName,
     odooJournalName: displayName,
@@ -794,7 +796,22 @@ export async function sendPayrollJournalToOdoo(payrollId: string): Promise<{
       hudooriExports.fawry,
       hudooriExports.cashFawry,
     ],
-  });
+  };
+  void sendPayrollJournalSummaryEmail(emailPayload)
+    .then((result) => {
+      logger.info(
+        { payrollId: payroll.id, recipients: emailRecipients, sent: result.sent },
+        'Payroll journal summary email finished',
+      );
+    })
+    .catch((err) => {
+      logger.error({ err, payrollId: payroll.id }, 'Payroll journal summary email failed');
+    });
+  const email = {
+    sent: false,
+    queued: true,
+    recipients: emailRecipients,
+  };
 
   return {
     payrollId: payroll.id,

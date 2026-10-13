@@ -61,3 +61,28 @@ export function expectRpcEnvelope(res: RpcResult): void {
   expect(res.body).toHaveProperty('result');
   expect(res.body).toHaveProperty('id');
 }
+
+export type RpcSurfaceKind =
+  | 'ROUTE_OK'
+  | 'BUSINESS_FAIL'
+  | 'HTTP_404'
+  | 'HTTP_5XX'
+  | 'BAD_ENVELOPE';
+
+/** Classify whether a mobile surface call reached a handler (vs missing route / crash). */
+export function classifyRpcSurface(res: RpcResult): RpcSurfaceKind {
+  if (res.status === 404) return 'HTTP_404';
+  if (res.status >= 500) return 'HTTP_5XX';
+  if (res.body.jsonrpc === '2.0' && res.body.result !== undefined) {
+    return res.body.result.success === true ? 'ROUTE_OK' : 'BUSINESS_FAIL';
+  }
+  const nested = res.body.result as { success?: boolean } | undefined;
+  if (nested?.success === true || nested?.success === false) {
+    return nested.success ? 'ROUTE_OK' : 'BUSINESS_FAIL';
+  }
+  const plain = res.body as { success?: boolean };
+  if (typeof plain.success === 'boolean') {
+    return plain.success ? 'ROUTE_OK' : 'BUSINESS_FAIL';
+  }
+  return 'BAD_ENVELOPE';
+}

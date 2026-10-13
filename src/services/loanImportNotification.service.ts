@@ -10,9 +10,11 @@ import {
   type LoanAccountsExportLine,
 } from './odoo/odooLoanAccounts.service';
 import { isLoanNotificationEmailEnabled } from './notificationEmail.service';
+import { logger } from '../utils/logger';
 
 export type LoanImportNotificationResult = {
   sent: boolean;
+  queued?: boolean;
   sentBranches: number;
   sentRecipients: string[];
   failures: Array<{ branchName: string; error: string }>;
@@ -211,5 +213,19 @@ export async function sendLoanImportNotifications(
     sentBranches: sent ? 1 : 0,
     sentRecipients,
     failures,
+  };
+}
+
+/** After Odoo sync — do not block the HTTP response on workbook build + SMTP. */
+export function queueLoanImportNotifications(importId: string): LoanImportNotificationResult {
+  void sendLoanImportNotifications(importId).catch((err) => {
+    logger.error({ err, importId }, 'Queued loan import notification email failed');
+  });
+  return {
+    sent: false,
+    queued: true,
+    sentBranches: 0,
+    sentRecipients: [],
+    failures: [],
   };
 }

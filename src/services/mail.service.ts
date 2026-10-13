@@ -36,6 +36,8 @@ function getTransporter(): Transporter | null {
       host: config.smtp.host,
       port: config.smtp.port,
       secure: config.smtp.secure,
+      pool: true,
+      maxConnections: 3,
       auth: {
         user: config.smtp.user,
         pass: config.smtp.pass,
@@ -268,6 +270,7 @@ export async function sendUserCredentialsEmail(params: {
   });
 
   try {
+    const started = Date.now();
     await transport.sendMail({
       from: `"${config.smtp.fromName}" <${config.smtp.fromEmail}>`,
       to,
@@ -275,13 +278,34 @@ export async function sendUserCredentialsEmail(params: {
       text,
       html,
     });
-    logger.info({ to, kind, companyCode: params.companyCode }, 'Credentials email sent');
+    logger.info(
+      { to, kind, companyCode: params.companyCode, smtpMs: Date.now() - started },
+      'Credentials email sent',
+    );
     return { sent: true, to };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error({ err, to }, 'Failed to send credentials email');
     return { sent: false, to, error: message };
   }
+}
+
+/** Respond to HTTP before SMTP finishes (delivery may still lag at the provider). */
+export function queueUserCredentialsEmail(
+  params: Parameters<typeof sendUserCredentialsEmail>[0],
+): { queued: boolean; to?: string; error?: string } {
+  const to = resolveRecipient(params.login, params.email);
+  if (!to) {
+    return { queued: false, error: 'NO_EMAIL' };
+  }
+  if (!getTransporter()) {
+    logger.warn({ to }, 'SMTP not configured — credentials email skipped');
+    return { queued: false, error: 'SMTP_NOT_CONFIGURED', to };
+  }
+  void sendUserCredentialsEmail(params).catch((err) => {
+    logger.error({ err, to }, 'Queued credentials email failed');
+  });
+  return { queued: true, to };
 }
 
 export async function sendPasswordResetLinkEmail(params: {

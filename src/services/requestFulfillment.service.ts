@@ -17,6 +17,17 @@ function isSickLeaveType(leaveType: string): boolean {
   return t.includes('sick') || t.includes('مرض');
 }
 
+/** Unpaid leave uses the existing grid «إجازة» (isOff) marker — not annual balance. */
+function isUnpaidLeaveType(leaveType: string): boolean {
+  const t = leaveType.toLowerCase();
+  return (
+    t.includes('unpaid') ||
+    t.includes('بدون راتب') ||
+    t.includes('بدون أجر') ||
+    t.includes('غير مدفوع')
+  );
+}
+
 async function findGridForEmployeeDay(employeeId: string, day: Date) {
   const grids = await prisma.shiftGrid.findMany({
     where: {
@@ -31,6 +42,30 @@ async function findGridForEmployeeDay(employeeId: string, day: Date) {
     take: 1,
   });
   return grids[0] ?? null;
+}
+
+function noGridCoverageError(dates: Date[]): AppError {
+  const keys = dates.map((d) => d.toISOString().slice(0, 10));
+  const from = keys[0] ?? '';
+  const to = keys[keys.length - 1] ?? from;
+  const period = !from ? '' : from === to ? from : `${from} → ${to}`;
+  const periodPart = period ? `فترة الطلب (${period})` : 'أيام هذا الطلب';
+  return new AppError(
+    `لا يوجد جدول شيفت يغطي ${periodPart} لهذا الموظف — أنشئ جدول الشيفت لهذه الفترة أولاً ثم أعد الموافقة`,
+    400,
+    'NO_GRID_COVERAGE',
+  );
+}
+
+/** Fail fast when any day has no shift-grid coverage for the employee. */
+export async function assertEmployeeGridCoverage(employeeId: string, dates: Date[]): Promise<void> {
+  if (!dates.length) return;
+  const missing: Date[] = [];
+  for (const day of dates) {
+    const grid = await findGridForEmployeeDay(employeeId, day);
+    if (!grid) missing.push(day);
+  }
+  if (missing.length) throw noGridCoverageError(missing);
 }
 
 async function upsertGridLineForDay(opts: {
@@ -83,21 +118,20 @@ export async function fulfillApprovedLeaveRequest(req: LeaveRequest): Promise<vo
   if (!employee) throw new AppError('Employee not found', 404, 'NOT_FOUND');
 
   const sick = isSickLeaveType(req.leaveType);
+  const unpaid = !sick && isUnpaidLeaveType(req.leaveType);
   const days = enumerateUtcDates(req.dateFrom, req.dateTo);
+  await assertEmployeeGridCoverage(employee.id, days);
 
   for (const day of days) {
     const grid = await findGridForEmployeeDay(employee.id, day);
-    if (!grid) {
-      throw new AppError(
-        `لا يوجد جدول شيفت يغطي ${day.toISOString().slice(0, 10)} للموظف`,
-        400,
-        'NO_GRID_COVERAGE',
-      );
-    }
+    if (!grid) throw noGridCoverageError([day]);
 
+    // sick → مرضية; unpaid → «إجازة»/isOff (not annual balance); else → سنوية
     const cellParams: Record<string, unknown> = sick
       ? { isSick: true, isOff: true, shiftId: null }
-      : { isAnnualLeave: true, shiftId: null };
+      : unpaid
+        ? { isOff: true, isAnnualLeave: false, isSick: false, shiftId: null }
+        : { isAnnualLeave: true, shiftId: null };
 
     await upsertGridLineForDay({
       gridId: grid.id,
@@ -117,15 +151,11 @@ export async function fulfillApprovedShiftChangeRequest(req: ShiftChangeRequest)
   if (!employee) throw new AppError('Employee not found', 404, 'NOT_FOUND');
 
   const days = enumerateUtcDates(req.dateFrom, req.dateTo);
+  await assertEmployeeGridCoverage(employee.id, days);
+
   for (const day of days) {
     const grid = await findGridForEmployeeDay(employee.id, day);
-    if (!grid) {
-      throw new AppError(
-        `لا يوجد جدول شيفت يغطي ${day.toISOString().slice(0, 10)} للموظف`,
-        400,
-        'NO_GRID_COVERAGE',
-      );
-    }
+    if (!grid) throw noGridCoverageError([day]);
 
     await upsertGridLineForDay({
       gridId: grid.id,

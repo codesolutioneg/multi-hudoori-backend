@@ -5,6 +5,7 @@
  */
 import axios from 'axios';
 import { prisma } from '../../prisma/client';
+import { AppError } from '../../utils/errors';
 import { getCompanyId } from '../../tenant/context';
 import { ensureOdooConfigFromEnv } from '../../bootstrap/odooConfig';
 
@@ -54,7 +55,7 @@ export async function authenticateOdooOrm(): Promise<OdooSession> {
   const login = config.login.trim();
   const password = config.password;
   if (!baseUrl || !database || !login || !password) {
-    throw new Error('Odoo URL و Database و Login و Password مطلوبة');
+    throw new AppError('Odoo URL و Database و Login و Password مطلوبة', 400, 'ODOO_NOT_CONFIGURED');
   }
 
   const uid = await jsonRpcCall<number | false>(baseUrl, {

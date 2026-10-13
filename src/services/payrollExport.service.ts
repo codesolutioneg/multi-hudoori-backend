@@ -1417,12 +1417,16 @@ export async function exportCashFawryXlsx(
   };
 }
 
-export function exportFileResponse(base64: string, filename: string) {
+export function exportFileResponse(
+  base64: string,
+  filename: string,
+  mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+) {
   return {
     file: base64,
     base64,
     filename,
-    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    mimeType,
   };
 }
 
