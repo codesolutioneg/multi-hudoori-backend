@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { UserRole } from '@prisma/client';
 import { asyncHandler } from '../../middlewares/asyncHandler';
 import { jsonRpcSuccess, biotimeOk, biotimeFail } from '../../middlewares/jsonRpc';
 import { requireAuth, requireHr, requireHrOrBranchManager, isBranchManagerUser } from '../../middlewares/auth';
@@ -8,10 +9,32 @@ import { assertShiftLocationAccess, listShiftsForLocationScope } from '../../ser
 import { employeeJson, employeeListJson, configSettingsWithCounts, configSummaryJson, shiftJson, shiftAssignmentJson, deviceJson, departmentJson, attendanceJson, shiftGridJson, shiftGridLineJson, payrollJson, payrollLineJson, deductionJson, advanceShortJson, advanceLongJson, locationJson, insuranceCompanyJson, DEDUCTION_TYPES, } from '../../services/serialize.service';
 import { prisma } from '../../prisma/client';
 import { shiftJsonExtras, shiftTimesFromParams, sortShiftsForDisplay, validateShiftTimes } from '../../services/shiftCalculations.service';
+import { ForbiddenError } from '../../utils/errors';
 
 const router = Router();
 
-router.post('/shifts/list', requireAuth, requireHrOrBranchManager, asyncHandler(async (req, res) => {
+/** Employees need an active-shift picker for shift-change requests; HR/BM keep scoped lists. */
+router.post('/shifts/list', requireAuth, asyncHandler(async (req, res) => {
+  const role = req.user!.role;
+  if (role === UserRole.EMPLOYEE) {
+    const shifts = sortShiftsForDisplay(
+      await prisma.shift.findMany({ where: { active: true } }),
+    );
+    jsonRpcSuccess(res, biotimeOk({ shifts: shifts.map(shiftJson), count: shifts.length }), req.rpcId);
+    return;
+  }
+  if (
+    role !== UserRole.BRANCH_MANAGER &&
+    role !== UserRole.HR_MANAGER &&
+    role !== UserRole.HR_SUPERVISOR &&
+    role !== UserRole.HR_USER &&
+    role !== UserRole.PLATFORM_ADMIN
+  ) {
+    throw new ForbiddenError('Access denied', 'ACCESS_DENIED');
+  }
+  if (role === UserRole.PLATFORM_ADMIN && !req.user!.activeCompanyId) {
+    throw new ForbiddenError('Select a company first', 'COMPANY_CONTEXT_REQUIRED');
+  }
   const shifts = isBranchManagerUser(req)
     ? sortShiftsForDisplay(await prisma.shift.findMany())
     : await listShiftsForLocationScope(await getHrLocationScopeFromReq(req));

@@ -108,8 +108,9 @@ router.post(
             passwordResetExpires: expires,
           },
         });
+        // Dashboard Flutter web is served under /app (landing owns `/`).
         const base = config.appPublicUrl.replace(/\/$/, '');
-        const resetUrl = `${base}/#/reset-password?token=${encodeURIComponent(rawToken)}`;
+        const resetUrl = `${base}/app/#/reset-password?token=${encodeURIComponent(rawToken)}`;
         const emailResult = await sendPasswordResetLinkEmail({
           name: user.name,
           login: user.login,

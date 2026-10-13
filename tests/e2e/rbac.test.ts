@@ -29,7 +29,8 @@ const GUARDED: { path: string; guard: string; allowed: UserRole[] }[] = [
   { path: '/api/biotime/employees/list', guard: 'requireHrOrBranchManager', allowed: HR_OR_BRANCH },
   { path: '/api/biotime/shift-grid/list', guard: 'requireHrOrBranchManager', allowed: HR_OR_BRANCH },
   { path: '/api/biotime/locations/list', guard: 'requireHrOrBranchManager', allowed: HR_OR_BRANCH },
-  { path: '/api/biotime/shifts/list', guard: 'requireHrOrBranchManager', allowed: HR_OR_BRANCH },
+  // Employees need shift options for shift-change requests (active shifts only).
+  { path: '/api/biotime/shifts/list', guard: 'requireAuth', allowed: [...HR_OR_BRANCH, UserRole.EMPLOYEE] },
   { path: '/api/biotime/dashboard/notifications', guard: 'requireHrOrBranchManager', allowed: HR_OR_BRANCH },
   { path: '/api/biotime/hiring-appointments/list', guard: 'requireHrOrBranchManager', allowed: HR_OR_BRANCH },
   { path: '/api/biotime/shift-grid/merge/candidates', guard: 'requireHrOrBranchManager', allowed: HR_OR_BRANCH },
