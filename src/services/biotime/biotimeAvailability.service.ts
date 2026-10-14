@@ -19,6 +19,8 @@ export function isBioTimeUnavailableError(err: unknown): boolean {
     msg.includes('econnrefused') ||
     msg.includes('enotfound') ||
     msg.includes('etimedout') ||
+    msg.includes('econnaborted') ||
+    msg.includes('timeout of') ||
     msg.includes('econnreset') ||
     msg.includes('socket hang up') ||
     msg.includes('network error') ||

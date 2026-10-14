@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import net from 'node:net';
 import { BioTimeConfig } from '@prisma/client';
 import { prisma } from '../../prisma/client';
 
@@ -25,6 +26,40 @@ export class BioTimeConnector {
     return connector;
   }
 
+  /** Overridable so unit tests can fake TCP without spying on node:net (ESM). */
+  static connectFn: typeof net.connect = net.connect;
+
+  /**
+   * Live TCP check of the BioTime host:port (no login).
+   * Updates `isConnected` so later jobs can branch on the same flag.
+   */
+  static async isServerReachable(timeoutMs = 5_000): Promise<boolean> {
+    const row = await prisma.bioTimeConfig.findFirst();
+    if (!row?.serverIp?.trim()) return false;
+    const host = row.serverIp.trim();
+    const port = row.serverPort || 8082;
+    const reachable = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const socket = BioTimeConnector.connectFn({ host, port });
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.removeAllListeners();
+        socket.destroy();
+        resolve(ok);
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      socket.once('connect', () => finish(true));
+      socket.once('error', () => finish(false));
+    });
+    await prisma.bioTimeConfig.update({
+      where: { id: row.id },
+      data: { isConnected: reachable },
+    });
+    return reachable;
+  }
+
   private authHeader(token: string): string {
     // Odoo biotime_config._get_auth_headers uses "JWT {token}" for jwt auth type
     if (this.config.authType === 'jwt') {
@@ -45,10 +80,14 @@ export class BioTimeConnector {
     const endpoint =
       this.config.authType === 'jwt' ? '/jwt-api-token-auth/' : '/api-token-auth/';
     const url = `${this.baseUrl}${endpoint}`;
-    const response = await axios.post(url, {
-      username: this.config.username,
-      password: this.config.password,
-    });
+    const response = await axios.post(
+      url,
+      {
+        username: this.config.username,
+        password: this.config.password,
+      },
+      { timeout: 30_000 },
+    );
 
     const token = response.data.token ?? response.data.access ?? response.data.key;
     if (!token) throw new Error('BioTime auth failed: no token returned');

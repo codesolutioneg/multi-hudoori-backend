@@ -297,9 +297,15 @@ export async function queuePunchReportExport(options: {
     };
 
     const biotimeReady = await isBioTimeConfigured();
+    let biotimeUp = false;
+    if (syncFirst && biotimeReady) {
+      const { BioTimeConnector } = await import('./biotime/biotimeConnector.service');
+      await update(3, 'جاري فحص اتصال سيرفر BioTime…');
+      biotimeUp = await BioTimeConnector.isServerReachable();
+    }
 
     if (syncFirst) {
-      if (!biotimeReady) {
+      if (!biotimeReady || !biotimeUp) {
         usedLocal = true;
         fallbackMessage = BIOTIME_LOCAL_FALLBACK_MESSAGE;
         await update(5, fallbackMessage);
@@ -427,6 +433,12 @@ export async function queuePunchReportSync(options: {
   });
 
   runInBackground(job.id, PUNCH_REPORT_SYNC_JOB, async () => {
+    const { BioTimeConnector } = await import('./biotime/biotimeConnector.service');
+    const biotimeUp = await BioTimeConnector.isServerReachable();
+    if (!biotimeUp) {
+      return 'سيرفر BioTime غير متصل — سيتم العرض من البصمات المحفوظة';
+    }
+
     // Same completeness as shift-grid punch sync: pull the full period from BioTime
     // (not only known Hudoori emp codes), so punches before hiringDate are stored too.
     try {
@@ -442,6 +454,13 @@ export async function queuePunchReportSync(options: {
       );
       return synced > 0 ? `تمت مزامنة ${synced} بصمة` : 'لا توجد بصمات جديدة';
     } catch (err) {
+      if (syncService.isBioTimeUnreachable(err)) {
+        logger.warn(
+          { err, jobId: job.id },
+          'Punch-report sync skipped; BioTime unreachable — using stored punches',
+        );
+        return 'انقطع اتصال BioTime — سيتم العرض من البصمات المحفوظة';
+      }
       const { isBioTimeUnavailableError, BIOTIME_LOCAL_FALLBACK_MESSAGE } =
         await import('./biotime/biotimeAvailability.service');
       if (isBioTimeUnavailableError(err)) {

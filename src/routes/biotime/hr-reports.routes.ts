@@ -340,6 +340,23 @@ router.post('/reports/punch-report/sync-start', requireAuth, requireHr, asyncHan
     return;
   }
 
+  // Don't block the report behind a 30s BioTime auth timeout when the host is down.
+  const { BioTimeConnector } = await import('../../services/biotime/biotimeConnector.service');
+  const biotimeUp = await BioTimeConnector.isServerReachable();
+  if (!biotimeUp) {
+    jsonRpcSuccess(
+      res,
+      biotimeOk({
+        queued: false,
+        fresh: false,
+        offline: true,
+        message: 'سيرفر BioTime غير متصل — سيتم العرض من البصمات المحفوظة',
+      }),
+      req.rpcId,
+    );
+    return;
+  }
+
   const employees = await findReportEmployees(scope);
   const { codes } = await resolveEmployeesBiotimeCodes(employees.map((e) => e.id));
   const jobId = await queuePunchReportSync({

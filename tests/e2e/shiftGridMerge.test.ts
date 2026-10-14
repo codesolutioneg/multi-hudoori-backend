@@ -637,7 +637,7 @@ describe('shift grid merge', () => {
           hr.token,
         ),
       );
-      expect(mergedB.crossLocationMode).toBe('last_week');
+      expect(mergedB.crossLocationMode).toBe('employee_card');
       expect(mergedB.crossLocationLineCount).toBeGreaterThan(0);
       expect(mergedB.employeeCount).toBe(1);
       // 7 days × 4 weeks = 28, minus days outside period on boundary weeks

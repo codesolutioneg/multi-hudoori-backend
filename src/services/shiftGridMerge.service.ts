@@ -72,7 +72,7 @@ export type MergeResult = {
   crossLocationLineCount?: number;
   crossLocationEmployeeCount?: number;
   excludedEmployeeCount?: number;
-  crossLocationMode?: 'last_week';
+  crossLocationMode?: 'employee_card';
 };
 
 function dayKey(date: Date): string {
@@ -364,7 +364,7 @@ export async function mergeShiftGrids(options: MergeShiftGridsOptions): Promise<
     conflicts: resolved.conflicts,
     ...(useOptionA
       ? {
-          crossLocationMode: 'last_week' as const,
+          crossLocationMode: 'employee_card' as const,
           crossLocationLineCount,
           crossLocationEmployeeCount,
           excludedEmployeeCount,
@@ -539,7 +539,7 @@ async function appendIntoExistingTarget(params: {
     conflicts: resolved.conflicts,
     ...(useOptionA
       ? {
-          crossLocationMode: 'last_week' as const,
+          crossLocationMode: 'employee_card' as const,
           crossLocationLineCount,
           crossLocationEmployeeCount,
           excludedEmployeeCount,
@@ -689,7 +689,7 @@ export async function previewShiftGridMerge(options: MergeShiftGridsOptions) {
       ]).size === 1,
     ...(useOptionA
       ? {
-          crossLocationMode: 'last_week' as const,
+          crossLocationMode: 'employee_card' as const,
           crossLocationLineCount,
           crossLocationEmployeeCount,
           excludedEmployeeCount,

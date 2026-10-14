@@ -86,6 +86,7 @@ describe('BioTimeConnector', () => {
 
     const authUrl = vi.mocked(mockedAxios.post).mock.calls[0][0];
     expect(authUrl).toContain('/jwt-api-token-auth/');
+    expect(vi.mocked(mockedAxios.post).mock.calls[0][2]).toMatchObject({ timeout: 30_000 });
     const call = vi.mocked(mockedAxios.request).mock.calls[0][0] as {
       headers: Record<string, string>;
     };
@@ -223,5 +224,46 @@ describe('BioTimeConnector', () => {
 
     const connector = await connectorFrom(config());
     await expect(connector.testConnection()).resolves.toBe(true);
+  });
+
+  it('marks BioTime reachable when the TCP port accepts a connection', async () => {
+    const { EventEmitter } = await import('node:events');
+    vi.mocked(prisma.bioTimeConfig.findFirst).mockResolvedValue(config() as never);
+    const socket = new EventEmitter() as import('node:net').Socket;
+    socket.destroy = vi.fn() as never;
+    const original = BioTimeConnector.connectFn;
+    BioTimeConnector.connectFn = ((opts: { host: string; port: number }) => {
+      expect(opts).toMatchObject({ host: '10.0.0.5', port: 8082 });
+      queueMicrotask(() => socket.emit('connect'));
+      return socket;
+    }) as typeof BioTimeConnector.connectFn;
+    try {
+      await expect(BioTimeConnector.isServerReachable()).resolves.toBe(true);
+      expect(prisma.bioTimeConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { isConnected: true } }),
+      );
+    } finally {
+      BioTimeConnector.connectFn = original;
+    }
+  });
+
+  it('marks BioTime unreachable when the TCP connect errors', async () => {
+    const { EventEmitter } = await import('node:events');
+    vi.mocked(prisma.bioTimeConfig.findFirst).mockResolvedValue(config() as never);
+    const socket = new EventEmitter() as import('node:net').Socket;
+    socket.destroy = vi.fn() as never;
+    const original = BioTimeConnector.connectFn;
+    BioTimeConnector.connectFn = ((() => {
+      queueMicrotask(() => socket.emit('error', new Error('ECONNREFUSED')));
+      return socket;
+    }) as typeof BioTimeConnector.connectFn);
+    try {
+      await expect(BioTimeConnector.isServerReachable()).resolves.toBe(false);
+      expect(prisma.bioTimeConfig.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { isConnected: false } }),
+      );
+    } finally {
+      BioTimeConnector.connectFn = original;
+    }
   });
 });

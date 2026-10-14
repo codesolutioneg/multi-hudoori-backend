@@ -538,6 +538,22 @@ export async function syncDevices(): Promise<number> {
   return count;
 }
 
+export function isBioTimeUnreachable(err: unknown): boolean {
+  const anyErr = err as { code?: string; message?: string; cause?: { code?: string } };
+  const code = String(anyErr?.code || anyErr?.cause?.code || '');
+  const message = String(anyErr?.message ?? err ?? '');
+  return (
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNABORTED' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ENOTFOUND' ||
+    code === 'EHOSTUNREACH' ||
+    /ETIMEDOUT|ECONNABORTED|ECONNREFUSED|EHOSTUNREACH|timeout of \d+ms exceeded/i.test(
+      message,
+    )
+  );
+}
+
 async function fetchTransactionsPage(
   connector: BioTimeConnector,
   page: number,
@@ -551,6 +567,7 @@ async function fetchTransactionsPage(
       return await connector.getTransactions(page, pageSize, filters);
     } catch (err) {
       lastError = err;
+      if (isBioTimeUnreachable(err)) break;
       if (attempt < maxRetries) {
         await new Promise((r) => setTimeout(r, 2000));
       }
