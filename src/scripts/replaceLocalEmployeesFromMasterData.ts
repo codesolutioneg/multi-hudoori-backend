@@ -72,7 +72,7 @@ type ExcelRow = {
   nationalId?: string;
   phone?: string;
   insuranceCompany?: string;
-  insuranceSalary?: number | null;
+  employeeInsuranceShare?: number | null;
   medicalInsuranceCompany?: string;
   medicalInsuranceSalary?: number | null;
   basicSalary?: number | null;
@@ -184,7 +184,7 @@ async function readExcel(): Promise<ExcelRow[]> {
         return String(p).replace(/\.0$/, '').trim() || undefined;
       })(),
       insuranceCompany: str(get(iIns)) || undefined,
-      insuranceSalary: num(get(iInsSal)),
+      employeeInsuranceShare: num(get(iInsSal)),
       medicalInsuranceCompany: str(get(iMed)) || undefined,
       medicalInsuranceSalary: num(get(iMedSal)),
       basicSalary: num(get(iBasic)),
@@ -419,7 +419,7 @@ async function main() {
           departmentId,
           basicSalary: row.basicSalary ?? 0,
           insuranceCompanyId,
-          insuranceSalary: row.insuranceSalary ?? 0,
+          employeeInsuranceShare: row.employeeInsuranceShare ?? 0,
           medicalInsuranceCompanyId,
           medicalInsuranceSalary: row.medicalInsuranceSalary ?? 0,
           mobileLine: row.mobileLine ?? false,

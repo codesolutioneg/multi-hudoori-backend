@@ -89,7 +89,7 @@ describe('punchReportImport parser', () => {
       employeeId: 'e1',
       employeeCode: '1001',
       basicSalary: 3000,
-      insuranceSalary: 0,
+      employeeInsuranceShare: 0,
       medicalInsuranceSalary: 0,
       sequence: 1,
       payrollId: 'p1',

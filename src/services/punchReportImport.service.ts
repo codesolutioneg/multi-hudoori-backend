@@ -287,7 +287,7 @@ export function buildPayrollLineFromSummary(params: {
   employeeId: string;
   employeeCode: string;
   basicSalary: number;
-  insuranceSalary: number;
+  employeeInsuranceShare: number;
   medicalInsuranceSalary: number;
   summary: PunchAttendanceSummary;
   sequence: number;
@@ -298,7 +298,7 @@ export function buildPayrollLineFromSummary(params: {
     employeeId,
     employeeCode,
     basicSalary,
-    insuranceSalary,
+    employeeInsuranceShare,
     medicalInsuranceSalary,
     summary,
     sequence,
@@ -370,7 +370,7 @@ export function buildPayrollLineFromSummary(params: {
     healthCertificatesDeduction: 0,
     fractionDeduction: 0,
     documentsDeduction: 0,
-    socialInsurance: insuranceSalary,
+    socialInsurance: employeeInsuranceShare,
     medicalInsurance: medicalInsuranceSalary,
     advanceShortTotal: 0,
     advanceLongTotal: 0,
@@ -381,7 +381,7 @@ export function buildPayrollLineFromSummary(params: {
   };
 
   const totals = recalculatePayrollLineTotals(lineBase as never, {
-    socialInsurance: insuranceSalary,
+    socialInsurance: employeeInsuranceShare,
     medicalInsurance: medicalInsuranceSalary,
   });
 
@@ -691,7 +691,7 @@ export async function rebuildPayrollFromPunchImport(
       employeeId: emp.id,
       employeeCode: emp.code ?? code,
       basicSalary: emp.basicSalary || 0,
-      insuranceSalary: emp.insuranceSalary || 0,
+      employeeInsuranceShare: emp.employeeInsuranceShare || 0,
       medicalInsuranceSalary: emp.medicalInsuranceSalary || 0,
       summary,
       sequence: seq,

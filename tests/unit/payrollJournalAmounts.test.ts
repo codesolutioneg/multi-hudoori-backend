@@ -28,7 +28,7 @@ describe('payrollJournalAmounts', () => {
     const amounts = computePayrollJournalAmounts([
       {
         totalEarnings: 1000,
-        employee: { insuranceSalary: 110, medicalInsuranceSalary: 40 },
+        employee: { employeeInsuranceShare: 110, medicalInsuranceSalary: 40 },
       },
     ]);
     expect(amounts.employeeSocial).toBe(110);
@@ -45,7 +45,7 @@ describe('payrollJournalAmounts', () => {
       {
         totalEarnings: 500,
         advanceShortTotal: 50,
-        employee: { insuranceSalary: 0, medicalInsuranceSalary: 0 },
+        employee: { employeeInsuranceShare: 0, medicalInsuranceSalary: 0 },
       },
     ]);
     const lines = buildPayrollJournalMoveLines(amounts, 'حـ/ حساب مرتبات');

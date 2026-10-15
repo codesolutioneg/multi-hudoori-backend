@@ -37,7 +37,7 @@ export async function listPayrolls(options?: { limit?: number; offset?: number; 
               archivedAt: true,
               archiveReason: true,
               basicSalary: true,
-              insuranceSalary: true,
+              employeeInsuranceShare: true,
               medicalInsuranceSalary: true,
               workPhone: true,
               fawryAccount: true,
@@ -373,7 +373,7 @@ export async function calculatePayroll(payrollId: string) {
       healthCertificatesDeduction: 0,
       fractionDeduction: 0,
       documentsDeduction: 0,
-      socialInsurance: employee.insuranceSalary,
+      socialInsurance: employee.employeeInsuranceShare,
       medicalInsurance: employee.medicalInsuranceSalary,
       advanceShortTotal: 0,
       advanceLongTotal: 0,
@@ -383,7 +383,7 @@ export async function calculatePayroll(payrollId: string) {
       ...employeeMetaFields(employee),
     };
     const totals = recalculatePayrollLineTotals(lineBase as PayrollLine, {
-      socialInsurance: employee.insuranceSalary,
+      socialInsurance: employee.employeeInsuranceShare,
       medicalInsurance: employee.medicalInsuranceSalary,
     });
 
@@ -507,7 +507,7 @@ export async function calculateSingleEmployee(payrollId: string, employeeId: str
     healthCertificatesDeduction: 0,
     fractionDeduction: 0,
     documentsDeduction: 0,
-    socialInsurance: employee.insuranceSalary,
+    socialInsurance: employee.employeeInsuranceShare,
     medicalInsurance: employee.medicalInsuranceSalary,
     advanceShortTotal: 0,
     advanceLongTotal: 0,
@@ -518,7 +518,7 @@ export async function calculateSingleEmployee(payrollId: string, employeeId: str
   };
 
   const totals = recalculatePayrollLineTotals(lineBase as PayrollLine, {
-    socialInsurance: employee.insuranceSalary,
+    socialInsurance: employee.employeeInsuranceShare,
     medicalInsurance: employee.medicalInsuranceSalary,
   });
 
@@ -558,7 +558,7 @@ export async function linkAdvancesToPayroll(payrollId: string) {
     const merged = { ...line, advanceShortTotal: shortTotal, advanceLongTotal: longTotal };
     const employee = await loadEmployeeMeta(line.employeeId);
     const totals = recalculatePayrollLineTotals(merged, {
-      socialInsurance: employee?.insuranceSalary ?? line.socialInsurance,
+      socialInsurance: employee?.employeeInsuranceShare ?? line.socialInsurance,
       medicalInsurance: employee?.medicalInsuranceSalary ?? line.medicalInsurance,
     });
     await prisma.payrollLine.update({
@@ -642,7 +642,7 @@ export async function recalculateBasicSalary(payrollId: string) {
     if (!employee?.basicSalary) continue;
     const merged = { ...line, basicSalary: employee.basicSalary };
     const totals = recalculatePayrollLineTotals(merged, {
-      socialInsurance: employee.insuranceSalary,
+      socialInsurance: employee.employeeInsuranceShare,
       medicalInsurance: employee.medicalInsuranceSalary,
     });
     await prisma.payrollLine.update({

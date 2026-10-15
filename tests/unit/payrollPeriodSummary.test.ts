@@ -22,7 +22,7 @@ function stubEmp(partial: Record<string, unknown> = {}) {
     departureDate: null,
     archivedAt: null,
     archiveReason: null,
-    insuranceSalary: 0,
+    employeeInsuranceShare: 0,
     medicalInsuranceSalary: 0,
     workPhone: null,
     fawryAccount: null,

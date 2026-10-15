@@ -60,7 +60,7 @@ describe('getPayslipValues excelNet', () => {
         name: 'Test',
         code: '341',
         jobTitle: 'X',
-        insuranceSalary: 0,
+        employeeInsuranceShare: 0,
         medicalInsuranceSalary: 0,
       } as never,
     };

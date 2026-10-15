@@ -158,6 +158,8 @@ model Company {
   attendanceEditRequests     AttendanceEditRequest[]
   overtimeAnalyses           OvertimeAnalysis[]
   hiringAppointments         HiringAppointment[]
+  insuranceEstablishments    InsuranceEstablishment[]
+  insuranceForms             InsuranceForm[]
   approvedSalesRequests      SalesRequest[]
 
   @@index([subscriptionPlanId])
@@ -205,6 +207,7 @@ model User {
   employeeProfile           EmployeeProfile?
   apiTokens                 ApiToken[]
   hiringAppointmentsCreated HiringAppointment[] @relation("HiringAppointmentCreator")
+  insuranceFormsCreated     InsuranceForm[]     @relation("InsuranceFormCreator")
   featureGrants             UserFeatureGrant[]  @relation("FeatureGrantUser")
   featureGrantsGiven        UserFeatureGrant[]  @relation("FeatureGrantBy")
   company                   Company?            @relation(fields: [companyId], references: [id], onDelete: Restrict)
@@ -397,7 +400,7 @@ model EmployeeProfile {
   insuranceNumber             String?   @map("insurance_number")
   insuranceStatus             String?   @map("insurance_status")
   insuranceCompanyId          String?   @map("insurance_company_id")
-  insuranceSalary             Float     @default(0) @map("insurance_salary")
+  employeeInsuranceShare      Float     @default(0) @map("insurance_salary")
   medicalInsuranceStatus      String?   @map("medical_insurance_status")
   medicalInsuranceCompanyId   String?   @map("medical_insurance_company_id")
   medicalInsuranceSalary      Float     @default(0) @map("medical_insurance_salary")
@@ -448,6 +451,7 @@ model EmployeeProfile {
   attendanceEditRequests  AttendanceEditRequest[]
   overtimeAnalyses        OvertimeAnalysis[]
   hiringAppointment       HiringAppointment?
+  insuranceForms          InsuranceForm[]
   custodies               EmployeeCustody[]
   shiftGridManualOtLines  ShiftGridManualOtLine[]
   company                 Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
@@ -1671,6 +1675,68 @@ model HiringAppointment {
   @@index([status, hrSeenAt])
   @@index([companyId])
   @@map("hiring_appointments")
+}
+
+/// Social-insurance establishment (منشأة) — company settings, selectable on forms.
+model InsuranceEstablishment {
+  companyId            String   @map("company_id")
+  id                   String   @id @default(cuid())
+  name                 String
+  insuranceNumber      String?  @map("insurance_number")
+  office               String?
+  address              String?
+  buildingNumber       String?  @map("building_number")
+  street               String?
+  village              String?
+  district             String?
+  governorate          String?
+  establishmentType    String?  @map("establishment_type")
+  phone                String?
+  active               Boolean  @default(true)
+  sequence             Int      @default(10)
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  forms   InsuranceForm[]
+
+  @@index([companyId])
+  @@index([companyId, active])
+  @@map("insurance_establishments")
+}
+
+enum InsuranceFormType {
+  S1
+  S6
+}
+
+/// Saved س1 / س6 insurance form requests (re-openable + PDF regeneratable).
+model InsuranceForm {
+  companyId        String            @map("company_id")
+  id               String            @id @default(cuid())
+  formType         InsuranceFormType @map("form_type")
+  employeeId       String?           @map("employee_id")
+  employeeName     String            @map("employee_name")
+  employeeCode     String?           @map("employee_code")
+  insuranceNumber  String?           @map("insurance_number")
+  nationalId       String?           @map("national_id")
+  establishmentId  String?           @map("establishment_id")
+  /// Full editable form fields (employee + establishment + applicant + S6 extras).
+  payload          Json
+  createdByUserId  String            @map("created_by_user_id")
+  createdByName    String?           @map("created_by_name")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  company       Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  employee      EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  establishment InsuranceEstablishment? @relation(fields: [establishmentId], references: [id], onDelete: SetNull)
+  createdBy     User                   @relation("InsuranceFormCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, formType, createdAt])
+  @@index([companyId, employeeId])
+  @@index([createdByUserId])
+  @@map("insurance_forms")
 }
 
 enum SubscriptionPlanStatus {

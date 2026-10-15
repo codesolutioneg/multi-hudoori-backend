@@ -79,7 +79,7 @@ function socialRow(emp: EmployeeWithReportRelations): InsuranceReportRow {
     insured: isInsured(emp.insuranceCompanyId, emp.insuranceStatus),
     status: emp.insuranceStatus?.trim() ?? '',
     companyName: emp.insuranceCompany?.name ?? '',
-    insuredSalary: emp.insuranceSalary ?? 0,
+    insuredSalary: emp.employeeInsuranceShare ?? 0,
     insuranceNumber: emp.insuranceNumber?.trim() ?? '',
     basicSalary: emp.basicSalary ?? 0,
   };
@@ -133,7 +133,7 @@ const SOCIAL_HEADERS = [
   'متأمن عليه',
   'الموقف التأميني',
   'جهة التأمين',
-  'الأجر التأميني',
+  'حصة الموظف',
   'الرقم التأميني',
   'الراتب الأساسي',
 ] as const;

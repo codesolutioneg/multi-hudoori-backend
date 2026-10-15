@@ -159,7 +159,7 @@ export function computePayrollLineExcelTotals(line: LineWithEmployee): {
     totalEarn = round2(workDaysSal + overtimeAmt);
   }
 
-  const socialIns = emp?.insuranceSalary || line.socialInsurance || 0;
+  const socialIns = emp?.employeeInsuranceShare || line.socialInsurance || 0;
   const medicalIns = emp?.medicalInsuranceSalary || line.medicalInsurance || 0;
   const lateVal = round2(line.lateDeduction || 0);
   const punchRepVal = round2(line.punchDeductionCheckin || 0);
@@ -438,7 +438,7 @@ export function getPayslipValues(
     basic = round2((line.workDaysSalary / line.workingDays) * 30);
   }
   const dailyRate = basic / 30;
-  const socIns = emp?.insuranceSalary || line.socialInsurance || 0;
+  const socIns = emp?.employeeInsuranceShare || line.socialInsurance || 0;
   const medIns = emp?.medicalInsuranceSalary || line.medicalInsurance || 0;
   // Same money cells as Payroll Excel export (not stale stored totalDeductions).
   const excelTotals = computePayrollLineExcelTotals(line);
@@ -1046,7 +1046,7 @@ export async function exportPayrollXlsx(
     tot[10] += overtimeAmt || 0;
     tot[11] += totalEarn || 0;
 
-    const socialIns = emp?.insuranceSalary || line.socialInsurance || 0;
+    const socialIns = emp?.employeeInsuranceShare || line.socialInsurance || 0;
     const medicalIns = emp?.medicalInsuranceSalary || line.medicalInsurance || 0;
     const lateVal = line.lateDeduction || 0;
     const lateDaysVal =

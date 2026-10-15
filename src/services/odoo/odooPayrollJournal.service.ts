@@ -96,7 +96,7 @@ async function loadPayrollForJournal(payrollId: string) {
             select: {
               name: true,
               code: true,
-              insuranceSalary: true,
+              employeeInsuranceShare: true,
               medicalInsuranceSalary: true,
               basicSalary: true,
               hasFawryAccount: true,
@@ -339,7 +339,7 @@ function odooPayrollLineVals(
   line: PayrollForJournal['lines'][number],
   hrEmployeeId?: number,
 ): Record<string, unknown> {
-  const empSoc = line.employee?.insuranceSalary || line.socialInsurance || 0;
+  const empSoc = line.employee?.employeeInsuranceShare || line.socialInsurance || 0;
   const empMed = line.employee?.medicalInsuranceSalary || line.medicalInsurance || 0;
   const vals: Record<string, unknown> = {
     payroll_id: odooPayrollId,

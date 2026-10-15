@@ -13,7 +13,7 @@ async function seedPunchedEmployee(opts: { code: string; name: string; basicSala
       name: opts.name,
       code: opts.code,
       basicSalary: opts.basicSalary ?? 3000,
-      insuranceSalary: 0,
+      employeeInsuranceShare: 0,
       medicalInsuranceSalary: 0,
     },
   });

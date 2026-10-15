@@ -42,7 +42,7 @@ export type PayrollJournalLineInput = {
   socialInsurance?: number | null;
   medicalInsurance?: number | null;
   employee?: {
-    insuranceSalary?: number | null;
+    employeeInsuranceShare?: number | null;
     medicalInsuranceSalary?: number | null;
     basicSalary?: number | null;
     hasFawryAccount?: boolean | null;
@@ -118,7 +118,7 @@ export function penaltyTotal(line: PayrollJournalLineInput): number {
 }
 
 function employeeSocial(line: PayrollJournalLineInput): number {
-  const fromEmp = line.employee?.insuranceSalary;
+  const fromEmp = line.employee?.employeeInsuranceShare;
   if (fromEmp && fromEmp > 0) return fromEmp;
   return line.socialInsurance || 0;
 }

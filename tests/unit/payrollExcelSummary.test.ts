@@ -11,7 +11,7 @@ function emp(partial: Partial<EmployeeProfile>): EmployeeProfile {
     active: true,
     hasFawryAccount: false,
     basicSalary: 9000,
-    insuranceSalary: 100,
+    employeeInsuranceShare: 100,
     medicalInsuranceSalary: 320.5,
     departureDate: null,
     archivedAt: null,

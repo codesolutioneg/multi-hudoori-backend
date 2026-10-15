@@ -4,6 +4,11 @@ export type FeatureKey = (typeof FEATURE_CATALOG)[number]['key'];
 export const FEATURE_CATALOG = [
   { key: 'attendance', nameAr: 'الحضور والشيفتات', nameEn: 'Attendance & shifts' },
   { key: 'hr_employees', nameAr: 'إدارة الموظفين', nameEn: 'Employee management' },
+  {
+    key: 'insurance_forms',
+    nameAr: 'استمارات التأمينات (س1 / س6)',
+    nameEn: 'Social insurance forms (S1 / S6)',
+  },
   { key: 'hr_leaves', nameAr: 'الإجازات', nameEn: 'Leaves' },
   { key: 'hr_requests', nameAr: 'الطلبات', nameEn: 'HR requests' },
   { key: 'employee_app', nameAr: 'تطبيق الموظف', nameEn: 'Employee app' },
@@ -50,6 +55,7 @@ export function allFeatureKeys(): string[] {
 export const MENU_FEATURE_MAP: Record<string, string> = {
   hiring_appointments: 'hr_employees',
   employees: 'hr_employees',
+  insurance_forms: 'insurance_forms',
   org_chart: 'hr_employees',
   shifts: 'attendance',
   shift_grid: 'attendance',
@@ -84,5 +90,6 @@ export const ROUTE_FEATURE_PREFIXES: Array<{ prefix: string; feature: string }> 
   { prefix: '/overtime', feature: 'overtime' },
   { prefix: '/reports', feature: 'hr_reports' },
   { prefix: '/employees', feature: 'hr_employees' },
+  { prefix: '/insurance-forms', feature: 'insurance_forms' },
   { prefix: '/odoo', feature: 'integrations' },
 ];

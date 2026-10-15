@@ -73,7 +73,7 @@ export const AUDIT_FIELD_LABELS_AR: Record<string, string> = {
   insuranceNumber: 'رقم التأمين',
   insuranceStatus: 'موقف التأمين',
   insuranceCompanyId: 'شركة التأمين',
-  insuranceSalary: 'أجر التأمين',
+  employeeInsuranceShare: 'حصة الموظف',
   medicalInsuranceStatus: 'موقف التأمين الطبي',
   medicalInsuranceCompanyId: 'شركة التأمين الطبي',
   medicalInsuranceSalary: 'أجر التأمين الطبي',

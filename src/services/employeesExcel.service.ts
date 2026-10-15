@@ -44,7 +44,7 @@ const HEADERS = [
   'تاريخ انتهاء',
   'الموقف التأميني',
   'الرقم التأميني',
-  'الأجر التأميني',
+  'حصة الموظف',
   'موقف التأمين الطبي',
   'الأجر التأميني الطبي',
   'الأجر الأساسي',
@@ -85,7 +85,7 @@ const HEADER_ALIASES: Record<(typeof HEADERS)[number], readonly string[]> = {
   'تاريخ انتهاء': ['تاريخ انتهاء', 'Health Certificate Expiry Date', 'health certificate expiry date'],
   'الموقف التأميني': ['الموقف التأميني', 'Insurance Status', 'insurance status', 'شركة التأمين الاجتماعي'],
   'الرقم التأميني': ['الرقم التأميني', 'Insurance Number', 'insurance number'],
-  'الأجر التأميني': ['الأجر التأميني', 'Insurance Salary', 'insurance salary'],
+  'حصة الموظف': ['حصة الموظف', 'الأجر التأميني', 'Insurance Salary', 'insurance salary'],
   'موقف التأمين الطبي': ['موقف التأمين الطبي', 'موقف التأمين', 'Medical Insurance Status', 'medical insurance status', 'شركة التأمين الطبي'],
   'الأجر التأميني الطبي': ['الأجر التأميني الطبي', 'الاجر التأميني الطبي', 'Medical Insurance Salary', 'medical insurance salary'],
   'الأجر الأساسي': ['الأجر الأساسي'],
@@ -120,7 +120,7 @@ const RTL_HEADER_SET = new Set<string>([
   'تاريخ انتهاء',
   'الموقف التأميني',
   'الرقم التأميني',
-  'الأجر التأميني',
+  'حصة الموظف',
   'موقف التأمين الطبي',
   'الأجر التأميني الطبي',
   'الأجر الأساسي',
@@ -303,7 +303,7 @@ const COLUMN_WIDTHS: Record<string, number> = {
   'تاريخ انتهاء': 12,
   'الموقف التأميني': 14,
   'الرقم التأميني': 16,
-  'الأجر التأميني': 12,
+  'حصة الموظف': 12,
   'موقف التأمين الطبي': 16,
   'الأجر التأميني الطبي': 14,
   'الأجر الأساسي': 12,
@@ -555,7 +555,7 @@ function employeeRowValues(emp: EmployeeWithRelations): (string | number)[] {
     custom.healthCertificateExpiryDate,
     emp.insuranceCompany?.name?.trim() || '',
     custom.insuranceNumber,
-    numExcel(custom.insuranceSalary),
+    numExcel(custom.employeeInsuranceShare),
     emp.medicalInsuranceCompany?.name?.trim() || '',
     numExcel(custom.medicalInsuranceSalary),
     basicSalary,
@@ -902,7 +902,9 @@ function buildEmployeeDataFromRow(
     if (exp) custom.healthCertificateExpiryDate = exp;
   }
   if (cellHasValue(row['الرقم التأميني'])) custom.insuranceNumber = row['الرقم التأميني'];
-  if (cellHasValue(row['الأجر التأميني'])) custom.insuranceSalary = row['الأجر التأميني'];
+  if (cellHasValue(row['حصة الموظف'])) {
+    custom.employeeInsuranceShare = row['حصة الموظف'];
+  }
   if (cellHasValue(row['الأجر التأميني الطبي'])) {
     const rounded = roundInsuranceSalary1(row['الأجر التأميني الطبي']);
     if (rounded != null) custom.medicalInsuranceSalary = rounded;

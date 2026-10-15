@@ -7,6 +7,8 @@ import { loadShiftGridForAccess } from './shift-grid-helpers';
 import * as syncService from '../../services/biotime/sync.service';
 import { countGridSummary, employeeCanRemoveFromGrid, flagsToLineData, formatGridCellLabel, getLatestSyncStatus, getShiftGridData, getShiftGridDataPaged, getShiftGridMeta, gridCellFromLine, parseCellFlags, transferEmployeeBetweenGrids, } from '../../services/shiftGridData.service';
 import { prisma } from '../../prisma/client';
+import { getCompanyId, runWithTenant } from '../../tenant/context';
+import { resolveEmployeesBiotimeCodes } from '../../services/employeePunchReport.service';
 
 const router = Router();
 
@@ -34,28 +36,59 @@ router.post('/shift-grid/sync/start', requireAuth, requireHrOrBranchManager, asy
     },
   });
 
+  const companyId = getCompanyId();
+  const lineEmployees = await prisma.shiftGridLine.findMany({
+    where: { gridId },
+    select: { employeeId: true },
+    distinct: ['employeeId'],
+  });
+  const employeeIds = [
+    ...new Set([
+      ...(grid.employeeIds ?? []),
+      ...lineEmployees.map((l) => l.employeeId),
+    ]),
+  ];
+
   void (async () => {
-    try {
-      const count = await syncService.syncTransactions(grid.dateFrom, grid.dateTo, job.id);
-      await prisma.syncJob.update({
-        where: { id: job.id },
-        data: {
-          status: 'done',
-          progress: 100,
-          message: `Synced ${count} transactions`,
-          finishedAt: new Date(),
-        },
-      });
-    } catch (err) {
-      await prisma.syncJob.update({
-        where: { id: job.id },
-        data: {
-          status: 'failed',
-          progress: 0,
-          message: err instanceof Error ? err.message : 'Sync failed',
-          finishedAt: new Date(),
-        },
-      });
+    const run = async () => {
+      try {
+        const resolved = employeeIds.length
+          ? await resolveEmployeesBiotimeCodes(employeeIds)
+          : { codes: [] as string[] };
+        const count = await syncService.syncTransactions(
+          grid.dateFrom,
+          grid.dateTo,
+          job.id,
+          resolved.codes.length ? { empCodes: resolved.codes } : undefined,
+        );
+        await prisma.syncJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'done',
+            progress: 100,
+            message: `Synced ${count} transactions`,
+            finishedAt: new Date(),
+          },
+        });
+      } catch (err) {
+        await prisma.syncJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'failed',
+            progress: 0,
+            message: err instanceof Error ? err.message : 'Sync failed',
+            finishedAt: new Date(),
+          },
+        });
+      }
+    };
+    if (companyId) {
+      await runWithTenant(
+        { companyId, isImpersonatingCompany: false, actorUserId: 'shift-grid-sync' },
+        run,
+      );
+    } else {
+      await run();
     }
   })();
 

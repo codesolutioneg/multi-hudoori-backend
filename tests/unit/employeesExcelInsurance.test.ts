@@ -6,11 +6,9 @@ describe('employeesExcel insurance columns', () => {
     const h = [...EMPLOYEE_EXCEL_HEADERS];
     expect(h).toContain('الموقف التأميني');
     expect(h).toContain('الرقم التأميني');
-    expect(h).toContain('الأجر التأميني');
+    expect(h).toContain('حصة الموظف');
     expect(h).toContain('موقف التأمين الطبي');
     expect(h).toContain('الأجر التأميني الطبي');
-    expect(h.indexOf('موقف التأمين الطبي')).toBeGreaterThan(
-      h.indexOf('الأجر التأميني'),
-    );
+    expect(h.indexOf('موقف التأمين الطبي')).toBeGreaterThan(h.indexOf('حصة الموظف'));
   });
 });

@@ -580,6 +580,10 @@ export async function syncTransactions(
   dateFrom?: Date,
   dateTo?: Date,
   jobId?: string,
+  opts?: {
+    /** When set, duplicate re-mark only covers these emp codes (branch report). */
+    empCodes?: string[];
+  },
 ): Promise<number> {
   const connector = await BioTimeConnector.fromDb();
   const config = await prisma.bioTimeConfig.findFirst();
@@ -653,8 +657,32 @@ export async function syncTransactions(
     page++;
   }
 
+  // After the last page the UI used to sit on "page=N/pages=N" with no updates while
+  // this phase re-marks every punch in the range (can take minutes for ~30k rows).
   if (dateFrom || dateTo) {
-    await remarkDuplicatesInRange(dateFrom, dateTo);
+    if (jobId) {
+      await prisma.syncJob.update({
+        where: { id: jobId },
+        data: {
+          message: 'تمت مزامنة الصفحات — جاري معالجة التكرارات…',
+          progress: 95,
+        },
+      }).catch(() => undefined);
+    }
+    await remarkDuplicatesInRange(dateFrom, dateTo, {
+      empCodes: opts?.empCodes,
+      onProgress: jobId
+        ? async (done, total) => {
+            await prisma.syncJob.update({
+              where: { id: jobId },
+              data: {
+                message: `جاري معالجة التكرارات… (${done}/${total})`,
+                progress: Math.min(99, 95 + Math.round((done / Math.max(total, 1)) * 4)),
+              },
+            }).catch(() => undefined);
+          }
+        : undefined,
+    });
   }
 
   if (dateFrom && dateTo) {
@@ -684,6 +712,7 @@ export async function syncTransactionRangeInSlices(
   dateTo: Date,
   onSliceProgress?: (done: number, total: number, synced: number) => Promise<void>,
   sliceDays = 7,
+  jobId?: string,
 ): Promise<number> {
   const sliceMs = sliceDays * 24 * 60 * 60 * 1000;
   const slices: { from: Date; to: Date }[] = [];
@@ -695,7 +724,8 @@ export async function syncTransactionRangeInSlices(
   let synced = 0;
   for (let i = 0; i < slices.length; i++) {
     const slice = slices[i]!;
-    synced += await syncTransactions(slice.from, slice.to);
+    // Pass jobId so duplicate re-mark progress is visible (same as report / grid sync).
+    synced += await syncTransactions(slice.from, slice.to, jobId);
     await onSliceProgress?.(i + 1, slices.length, synced);
   }
 

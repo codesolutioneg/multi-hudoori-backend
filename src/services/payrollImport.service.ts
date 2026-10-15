@@ -545,7 +545,7 @@ export async function importPayrollXlsx(payrollId: string, base64: string) {
           departmentName: empWithDept?.department?.name ?? '',
           employeeLocation:
             empWithDept?.workLocation?.name ?? employee.location ?? '',
-          socialInsurance: employee.insuranceSalary || 0,
+          socialInsurance: employee.employeeInsuranceShare || 0,
           medicalInsurance: employee.medicalInsuranceSalary || 0,
           notes: 'مضاف يدوياً من استيراد Excel',
         };

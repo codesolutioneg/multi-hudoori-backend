@@ -175,7 +175,7 @@ function lineRowValues(
   const sickDedVal = round2(line.sickDeduction || 0);
   const absentDedVal = round2(line.absentDeduction || 0);
   const penaltyVal = round2((daily * (line.adminDeduction || 0)) + (line.penaltyDeductionValue || 0));
-  const socialIns = (emp?.insuranceSalary && emp.insuranceSalary > 0) ? emp.insuranceSalary : (line.socialInsurance || 0);
+  const socialIns = (emp?.employeeInsuranceShare && emp.employeeInsuranceShare > 0) ? emp.employeeInsuranceShare : (line.socialInsurance || 0);
   const medicalIns = (emp?.medicalInsuranceSalary && emp.medicalInsuranceSalary > 0)
     ? emp.medicalInsuranceSalary
     : (line.medicalInsurance || 0);

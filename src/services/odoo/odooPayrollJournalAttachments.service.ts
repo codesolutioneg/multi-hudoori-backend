@@ -17,7 +17,7 @@ type PayrollLineForSync = {
   medicalInsurance: number | null;
   employee: {
     code: string | null;
-    insuranceSalary: number | null;
+    employeeInsuranceShare: number | null;
     medicalInsuranceSalary: number | null;
     hasFawryAccount: boolean;
   } | null;
@@ -109,7 +109,7 @@ export async function syncOdooHrEmployeesForPayroll(
       [
         [hrId],
         {
-          insurance_salary: emp.insuranceSalary || line.socialInsurance || 0,
+          insurance_salary: emp.employeeInsuranceShare || line.socialInsurance || 0,
           medical_insurance_salary:
             emp.medicalInsuranceSalary || line.medicalInsurance || 0,
           fawry_account: Boolean(emp.hasFawryAccount),

@@ -2,6 +2,7 @@ import type { EmployeeProfile } from '@prisma/client';
 import { parseEgyptianNationalId } from '../utils/egyptianNationalId';
 import { validateEgyptianIban } from '../utils/iban';
 import { AppError } from '../utils/errors';
+import { insuranceWageFromShare } from '../utils/insuranceWage';
 import { normalizeDocumentStatus, syncLegacyDocBooleans } from './employeeDocuments.service';
 
 export const SKILL_LEVELS = [
@@ -106,7 +107,8 @@ export function employeeCustomFieldsJson(employee: EmployeeProfile) {
     insuranceNumber: employee.insuranceNumber ?? '',
     insuranceStatus: employee.insuranceStatus ?? '',
     insuranceCompanyId: employee.insuranceCompanyId ?? false,
-    insuranceSalary: employee.insuranceSalary,
+    employeeInsuranceShare: employee.employeeInsuranceShare,
+    insuranceWage: insuranceWageFromShare(employee.employeeInsuranceShare),
     medicalInsuranceStatus: employee.medicalInsuranceStatus ?? '',
     medicalInsuranceCompanyId: employee.medicalInsuranceCompanyId ?? false,
     medicalInsuranceSalary: employee.medicalInsuranceSalary,
@@ -253,7 +255,11 @@ export function parseEmployeeCustomUpdate(
     const v = params.medicalInsuranceCompanyId;
     data.medicalInsuranceCompanyId = v && v !== false ? String(v) : null;
   }
-  if ('insuranceSalary' in params) data.insuranceSalary = parseOptionalFloat(params.insuranceSalary);
+  if ('employeeInsuranceShare' in params) {
+    data.employeeInsuranceShare = parseOptionalFloat(params.employeeInsuranceShare);
+  } else if ('insuranceSalary' in params) {
+    data.employeeInsuranceShare = parseOptionalFloat(params.insuranceSalary);
+  }
   if ('medicalInsuranceSalary' in params) {
     data.medicalInsuranceSalary = parseOptionalFloat(params.medicalInsuranceSalary);
   }

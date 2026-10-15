@@ -133,12 +133,14 @@ router.post('/employees/update', requireAuth, requireHr, asyncHandler(async (req
       }
       const manager = await prisma.employeeProfile.findUnique({
         where: { id: nextManagerId },
-        select: { id: true, active: true, archivedAt: true },
+        select: { id: true },
       });
-      if (!manager || !manager.active || manager.archivedAt) {
+      // Status (active/archived) is not enforced here — HR often saves other
+      // profile fields while an existing manager is archived/inactive.
+      if (!manager) {
         jsonRpcSuccess(
           res,
-          biotimeFail('المدير المباشر غير موجود أو غير نشط', 'NOT_FOUND'),
+          biotimeFail('المدير المباشر غير موجود', 'NOT_FOUND'),
           req.rpcId,
         );
         return;
@@ -155,7 +157,11 @@ router.post('/employees/update', requireAuth, requireHr, asyncHandler(async (req
     }
     data.managerId = nextManagerId;
   }
-  if ('insuranceSalary' in params) data.insuranceSalary = Number(params.insuranceSalary);
+  if ('employeeInsuranceShare' in params) {
+    data.employeeInsuranceShare = Number(params.employeeInsuranceShare);
+  } else if ('insuranceSalary' in params) {
+    data.employeeInsuranceShare = Number(params.insuranceSalary);
+  }
   if ('medicalInsuranceSalary' in params) data.medicalInsuranceSalary = Number(params.medicalInsuranceSalary);
   Object.assign(
     data,

@@ -253,7 +253,7 @@ export async function importPayrollEditTemplate(payrollId: string, base64: strin
 
     const merged = { ...line, ...data } as PayrollLine;
     const totals = recalculatePayrollLineTotals(merged, {
-      socialInsurance: line.employee?.insuranceSalary ?? line.socialInsurance,
+      socialInsurance: line.employee?.employeeInsuranceShare ?? line.socialInsurance,
       medicalInsurance: line.employee?.medicalInsuranceSalary ?? line.medicalInsurance,
     });
 

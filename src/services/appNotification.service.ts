@@ -366,7 +366,7 @@ export async function notifyPayrollConfirmed(payrollId: string): Promise<void> {
               code: true,
               jobTitle: true,
               basicSalary: true,
-              insuranceSalary: true,
+              employeeInsuranceShare: true,
               medicalInsuranceSalary: true,
               department: { select: { name: true } },
               workLocation: { select: { name: true } },

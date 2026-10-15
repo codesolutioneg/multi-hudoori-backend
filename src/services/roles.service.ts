@@ -142,6 +142,12 @@ export function getMenusForUser(
     if (roles.isHrManager) {
       // The org chart shows the whole company's reporting line, so it stops with
       // the HR manager (and the platform admin, who is folded into that flag).
+      hrMenus.push({
+        id: 'insurance_forms',
+        name: 'استمارات تأمينية',
+        icon: 'policy',
+        route: '/hr/insurance-forms',
+      });
       hrMenus.push({ id: 'org_chart', name: 'الهيكل التنظيمي', icon: 'account_tree', route: '/org-chart' });
       hrMenus.push({ id: 'settings', name: 'إعدادات', icon: 'settings', route: '/hr/settings' });
     }

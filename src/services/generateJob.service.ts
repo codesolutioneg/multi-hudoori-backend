@@ -240,6 +240,8 @@ export async function queueCompanyPeriodPunchSync(
           },
         });
       },
+      7,
+      job.id,
     );
     return count > 0
       ? `تمت مزامنة ${count} بصمة للفترة`
@@ -446,6 +448,7 @@ export async function queuePunchReportSync(options: {
         options.dateFrom,
         options.dateTo,
         job.id,
+        { empCodes: options.empCodes },
       );
       await syncService.recordTransactionRangeCoverage(
         options.dateFrom,

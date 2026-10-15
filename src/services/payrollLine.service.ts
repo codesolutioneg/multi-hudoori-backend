@@ -216,7 +216,7 @@ export async function updatePayrollLine(lineId: string, fields: Record<string, u
 
   const merged = { ...existing, ...data } as PayrollLine;
   const totals = recalculatePayrollLineTotals(merged, {
-    socialInsurance: existing.employee?.insuranceSalary ?? existing.socialInsurance,
+    socialInsurance: existing.employee?.employeeInsuranceShare ?? existing.socialInsurance,
     medicalInsurance: existing.employee?.medicalInsuranceSalary ?? existing.medicalInsurance,
   });
 
@@ -289,7 +289,7 @@ export async function fixBasicSalarySingle(lineId: string) {
   } as PayrollLine;
 
   const totals = recalculatePayrollLineTotals(merged, {
-    socialInsurance: line.employee?.insuranceSalary ?? line.socialInsurance,
+    socialInsurance: line.employee?.employeeInsuranceShare ?? line.socialInsurance,
     medicalInsurance: line.employee?.medicalInsuranceSalary ?? line.medicalInsurance,
   });
 

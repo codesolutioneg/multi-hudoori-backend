@@ -37,7 +37,7 @@ function row(partial: Partial<EmployeePushRow>): EmployeePushRow {
     hasCriminalRecord: false,
     skillLevel: null,
     insuranceStatus: null,
-    insuranceSalary: 0,
+    employeeInsuranceShare: 0,
     medicalInsuranceStatus: null,
     medicalInsuranceSalary: 0,
     hasFawryAccount: false,
@@ -108,10 +108,10 @@ describe('employeeBiotimeFingerprint', () => {
   });
 
   it('does not include payroll-only fields in fingerprint', () => {
-    const employee = row({ basicSalary: 99999, insuranceSalary: 88888 });
+    const employee = row({ basicSalary: 99999, employeeInsuranceShare: 88888 });
     const withSalary = computePushFingerprint(snapshotFromEmployee(employee));
 
-    const employee2 = row({ basicSalary: 1, insuranceSalary: 2 });
+    const employee2 = row({ basicSalary: 1, employeeInsuranceShare: 2 });
     const otherSalary = computePushFingerprint(snapshotFromEmployee(employee2));
 
     expect(withSalary).toBe(otherSalary);

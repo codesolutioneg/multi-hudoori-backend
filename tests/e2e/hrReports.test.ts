@@ -392,7 +392,7 @@ describe('HR compliance reports', () => {
           name: 'Fully Insured',
           code: 'I001',
           insuranceCompanyId: social.id,
-          insuranceSalary: 4500,
+          employeeInsuranceShare: 4500,
           insuranceNumber: 'S-1',
           medicalInsuranceCompanyId: medical.id,
           medicalInsuranceSalary: 800,
