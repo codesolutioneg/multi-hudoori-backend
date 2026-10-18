@@ -18,6 +18,7 @@ import { formatLocationDisplay } from './serialize.service';
 import { payrollMonthRange } from './shiftGridMerge.service';
 import {
   calculateLoanPaymentAmounts,
+  employeeForcedCashChannel,
   employeeIsFawry,
   accountsExportLocationToken,
 } from './odoo/odooLoanAccounts.service';
@@ -431,6 +432,7 @@ export function advanceLoanImportJson(batch: {
   defaultReason: string | null;
   createdAt: Date;
   kind?: string | null;
+  source?: string | null;
   cashAmount?: number | null;
   fawryAmount?: number | null;
   totalAmount?: number | null;
@@ -452,6 +454,7 @@ export function advanceLoanImportJson(batch: {
     defaultRepaymentMonths: batch.defaultRepaymentMonths,
     defaultReason: batch.defaultReason ?? '',
     kind: batch.kind ?? 'loan',
+    source: batch.source ?? 'sheet',
     cashAmount: batch.cashAmount ?? null,
     fawryAmount: batch.fawryAmount ?? null,
     totalAmount: batch.totalAmount ?? null,
@@ -494,12 +497,16 @@ export function advanceLoanImportLineJson(line: {
     hiringDate?: Date | string | null;
     hasFawryAccount: boolean;
     fawryAccount: string | null;
+    active?: boolean | null;
+    archivedAt?: Date | string | null;
+    departureDate?: Date | string | null;
     workLocation?: { name: string; actualName?: string | null } | null;
   } | null;
 }, options?: { useCurrentEmployeePaymentChannel?: boolean }) {
-  const isFawry = options?.useCurrentEmployeePaymentChannel && line.employee
-    ? employeeIsFawry(line.employee)
-    : line.isFawry === true;
+  const isFawry =
+    options?.useCurrentEmployeePaymentChannel && line.employee
+      ? employeeIsFawry(line.employee)
+      : line.isFawry === true && !employeeForcedCashChannel(line.employee);
   const hiringRaw = line.employee?.hiringDate;
   const hiringDate =
     hiringRaw instanceof Date
@@ -582,6 +589,9 @@ export async function getAdvanceLoanImport(id: string) {
               hiringDate: true,
               hasFawryAccount: true,
               fawryAccount: true,
+              active: true,
+              archivedAt: true,
+              departureDate: true,
               workLocation: { select: { id: true, name: true, actualName: true } },
             },
           },
@@ -607,7 +617,7 @@ export async function getAdvanceLoanImport(id: string) {
       repaymentMonths: line.repaymentMonths,
       isFawry: useCurrentPaymentChannel && line.employee
         ? employeeIsFawry(line.employee)
-        : line.isFawry,
+        : line.isFawry === true && !employeeForcedCashChannel(line.employee),
       shortAdvance: line.shortAdvance,
       employee: line.employee,
     })),
@@ -697,10 +707,19 @@ export function summarizeLoanImportBatch<
       jobTitle: string | null;
       hasFawryAccount: boolean;
       fawryAccount: string | null;
+      active?: boolean | null;
+      archivedAt?: Date | string | null;
+      departureDate?: Date | string | null;
       workLocation?: { id: string; name: string; actualName: string | null } | null;
     } | null;
   },
 >(lines: T[]) {
+  /** Archived / inactive / departed always كاش; otherwise honor the line flag. */
+  const resolvedIsFawry = (line: T): boolean => {
+    if (employeeForcedCashChannel(line.employee)) return false;
+    return line.isFawry === true;
+  };
+
   const locationCounts = new Map<string, { id: string; name: string; count: number }>();
   for (const line of lines) {
     const loc = line.employee?.workLocation;
@@ -727,7 +746,7 @@ export function summarizeLoanImportBatch<
         !primary ||
         (primary.id ? locationId !== primary.id : locationName !== primary.name);
       if (!isOutsider) return null;
-      const isFawry = line.isFawry === true;
+      const isFawry = resolvedIsFawry(line);
       const amounts = calculateLoanPaymentAmounts(line.approvedAmount, isFawry);
       return {
         employeeCode: line.employeeCode || line.employee?.code || '',
@@ -751,7 +770,7 @@ export function summarizeLoanImportBatch<
   let fawryCommissionAmount = 0;
   for (const line of lines) {
     if (!isLoanImportTotalsLine(line)) continue;
-    const isFawry = line.isFawry === true;
+    const isFawry = resolvedIsFawry(line);
     const amounts = calculateLoanPaymentAmounts(line.approvedAmount, isFawry);
     if (isFawry) {
       fawryApprovedAmount += amounts.approvedAmount;
@@ -792,6 +811,9 @@ export async function freezeLoanImportPaymentSnapshot(importId: string) {
             select: {
               hasFawryAccount: true,
               fawryAccount: true,
+              active: true,
+              archivedAt: true,
+              departureDate: true,
               code: true,
               name: true,
               jobTitle: true,
@@ -827,6 +849,10 @@ export async function listAdvanceLoanImports(
     where: {
       state,
       kind,
+      // Manual open batches are managed from the advances «سلف يدوية» row.
+      ...(state === AdvanceLoanImportState.draft
+        ? { source: { not: 'manual' } }
+        : {}),
       lines: { some: {} },
     },
     orderBy: { createdAt: 'desc' },
@@ -852,6 +878,9 @@ export async function listAdvanceLoanImports(
               jobTitle: true,
               hasFawryAccount: true,
               fawryAccount: true,
+              active: true,
+              archivedAt: true,
+              departureDate: true,
               workLocation: { select: { id: true, name: true, actualName: true } },
             },
           },
@@ -869,7 +898,7 @@ export async function listAdvanceLoanImports(
           ...line,
           isFawry: useCurrentPaymentChannel && line.employee
             ? employeeIsFawry(line.employee)
-            : line.isFawry,
+            : line.isFawry === true && !employeeForcedCashChannel(line.employee),
         })),
       );
       const employeesByCode = new Map<
@@ -902,6 +931,7 @@ export async function listAdvanceLoanImports(
         id: r.id,
         reference: r.reference,
         kind: r.kind,
+        source: r.source ?? 'sheet',
         date: r.date.toISOString().slice(0, 10),
         state: r.state,
         lineCount: r._count.lines,
@@ -927,11 +957,18 @@ export async function listAdvanceLoanImports(
 export async function deleteAdvanceLoanImportDraft(id: string) {
   const batch = await prisma.advanceLoanImport.findUnique({
     where: { id },
-    select: { id: true, state: true },
+    select: { id: true, state: true, source: true },
   });
   if (!batch) throw new NotFoundError('Advance loan import not found');
   if (batch.state !== AdvanceLoanImportState.draft) {
     throw new AppError('لا يمكن حذف استيراد تم اعتماده', 400, 'ACTION_ERROR');
+  }
+  if (batch.source === 'manual') {
+    throw new AppError(
+      'لا يمكن حذف باتش السلف اليدوية بالكامل — احذف السطور أو ألغِ السلف منفردة',
+      400,
+      'ACTION_ERROR',
+    );
   }
   await prisma.advanceLoanImport.delete({ where: { id } });
   return { deleted: true, id };
@@ -941,15 +978,37 @@ export async function deleteAdvanceLoanImportDraft(id: string) {
 export async function deleteAdvanceLoanImportLine(lineId: string) {
   const line = await prisma.advanceLoanImportLine.findUnique({
     where: { id: lineId },
-    include: { import: { select: { id: true, state: true } } },
+    include: {
+      import: {
+        select: { id: true, state: true, source: true, odooAccountsSendId: true },
+      },
+    },
   });
   if (!line) throw new NotFoundError('Line not found');
   if (line.import.state === AdvanceLoanImportState.locked) {
     throw new AppError('الاستيراد مقفول — لا يمكن حذف السطر', 400, 'ACTION_ERROR');
   }
-  if (line.shortAdvanceId) {
+  const isOpenManual =
+    line.import.source === 'manual' &&
+    line.import.state === AdvanceLoanImportState.draft &&
+    line.import.odooAccountsSendId == null;
+
+  if (line.shortAdvanceId && !isOpenManual) {
     throw new AppError('السطر معتمد بالفعل — لا يمكن حذفه', 400, 'ACTION_ERROR');
   }
+
+  if (isOpenManual && line.shortAdvanceId) {
+    const short = await prisma.advanceShort.findUnique({
+      where: { id: line.shortAdvanceId },
+    });
+    if (short && !short.isDeducted && !short.payrollId) {
+      await prisma.advanceShort.update({
+        where: { id: short.id },
+        data: { state: AdvanceState.cancelled },
+      });
+    }
+  }
+
   await prisma.advanceLoanImportLine.delete({ where: { id: lineId } });
   await freezeLoanImportPaymentSnapshot(line.importId);
   return { deleted: true, id: lineId, importId: line.importId };
@@ -1640,7 +1699,12 @@ export async function updateAdvanceLoanImportLine(
   if (line.import.state === AdvanceLoanImportState.locked) {
     throw new AppError('الاستيراد مقفول', 400, 'ACTION_ERROR');
   }
-  if (line.shortAdvanceId) {
+  const isOpenManual =
+    line.import.source === 'manual' &&
+    line.import.state === AdvanceLoanImportState.draft &&
+    line.import.odooAccountsSendId == null;
+
+  if (line.shortAdvanceId && !isOpenManual) {
     throw new AppError('السطر معتمد بالفعل', 400, 'ACTION_ERROR');
   }
 
@@ -1650,7 +1714,7 @@ export async function updateAdvanceLoanImportLine(
     if (!Number.isFinite(approved) || approved < 0) {
       throw new AppError('المبلغ المعتمد غير صحيح', 400, 'VALIDATION_ERROR');
     }
-    if (approved > line.requestedAmount + 0.009) {
+    if (!isOpenManual && approved > line.requestedAmount + 0.009) {
       throw new AppError(
         `المبلغ المعتمد (${approved}) أكبر من المبلغ المطلوب (${line.requestedAmount})`,
         400,
@@ -1658,6 +1722,9 @@ export async function updateAdvanceLoanImportLine(
       );
     }
     data.approvedAmount = approved;
+    if (isOpenManual) {
+      data.requestedAmount = approved;
+    }
   }
   if (fields.toApprove !== undefined)
     data.toApprove = Boolean(fields.toApprove);
@@ -1677,6 +1744,19 @@ export async function updateAdvanceLoanImportLine(
     where: { id: lineId },
     data,
   });
+
+  if (
+    isOpenManual &&
+    line.shortAdvanceId &&
+    fields.approvedAmount !== undefined
+  ) {
+    const approved = Number(fields.approvedAmount);
+    await prisma.advanceShort.update({
+      where: { id: line.shortAdvanceId },
+      data: { amount: approved },
+    });
+  }
+
   return advanceLoanImportLineJson(updated);
 }
 
@@ -1693,6 +1773,9 @@ export async function approveAdvanceLoanImport(
             select: {
               hasFawryAccount: true,
               fawryAccount: true,
+              active: true,
+              archivedAt: true,
+              departureDate: true,
             },
           },
         },
@@ -1700,6 +1783,13 @@ export async function approveAdvanceLoanImport(
     },
   });
   if (!batch) throw new NotFoundError('Advance loan import not found');
+  if (batch.source === 'manual') {
+    throw new AppError(
+      'باتش السلف اليدوية يُعتمد بالإرسال إلى Odoo مباشرة — استخدم إرسال الحسابات',
+      400,
+      'MANUAL_BATCH_USE_SEND',
+    );
+  }
   if (batch.state === AdvanceLoanImportState.locked) {
     throw new AppError('تم اعتماد هذا الاستيراد مسبقاً', 400, 'ACTION_ERROR');
   }

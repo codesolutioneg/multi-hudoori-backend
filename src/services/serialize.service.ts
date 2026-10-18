@@ -801,6 +801,9 @@ export function advanceShortJson(
       id: string;
       reference: string;
       date: Date;
+      state?: string;
+      source?: string;
+      odooAccountsSendId?: number | null;
     } | null;
   },
 ) {
@@ -815,6 +818,9 @@ export function advanceShortJson(
     importId: a.loanImport?.id ?? null,
     importReference: a.loanImport?.reference ?? '',
     importDate: a.loanImport?.date.toISOString().slice(0, 10) ?? null,
+    importState: a.loanImport?.state ?? null,
+    importSource: a.loanImport?.source ?? null,
+    importOdooAccountsSendId: a.loanImport?.odooAccountsSendId ?? null,
     amount: a.amount,
     hasFawryAccount: a.employee?.hasFawryAccount === true || Boolean(a.employee?.fawryAccount?.trim()),
     state: a.state,

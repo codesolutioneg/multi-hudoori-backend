@@ -171,6 +171,14 @@ export type MobilePunchContext = {
   lastPunch: PunchJson | null;
   todayPunches: PunchJson[];
   nextAction: 'check_in' | 'check_out' | null;
+  /** Approved field mission covering Cairo today — home geofence skipped on punch. */
+  activeMission: {
+    id: string;
+    details: string;
+    dateFrom: string;
+    dateTo: string;
+  } | null;
+  geofenceRelaxed: boolean;
 };
 
 export async function getMobilePunchContext(userId: string): Promise<MobilePunchContext> {
@@ -184,6 +192,21 @@ export async function getMobilePunchContext(userId: string): Promise<MobilePunch
         }
       : null;
 
+  const { findApprovedMissionForEmployeeDay } = await import(
+    './fieldMissionRequest.service'
+  );
+  const today = cairoDateOnly();
+  const mission = await findApprovedMissionForEmployeeDay(employee.id, today);
+  const activeMission = mission
+    ? {
+        id: mission.id,
+        details: mission.details,
+        dateFrom: mission.dateFrom.toISOString().slice(0, 10),
+        dateTo: mission.dateTo.toISOString().slice(0, 10),
+      }
+    : null;
+  const geofenceRelaxed = Boolean(activeMission);
+
   if (!employee.locationId || !employee.workLocation) {
     return {
       enabled: false,
@@ -193,6 +216,8 @@ export async function getMobilePunchContext(userId: string): Promise<MobilePunch
       lastPunch: null,
       todayPunches: [],
       nextAction: null,
+      activeMission,
+      geofenceRelaxed,
     };
   }
 
@@ -214,6 +239,8 @@ export async function getMobilePunchContext(userId: string): Promise<MobilePunch
       lastPunch: null,
       todayPunches: [],
       nextAction: null,
+      activeMission,
+      geofenceRelaxed,
     };
   }
 
@@ -226,10 +253,11 @@ export async function getMobilePunchContext(userId: string): Promise<MobilePunch
       lastPunch: null,
       todayPunches: [],
       nextAction: null,
+      activeMission,
+      geofenceRelaxed,
     };
   }
 
-  const today = cairoDateOnly();
   const windowFrom = new Date(today.getTime() - 12 * 3600_000);
   const punches = await prisma.transaction.findMany({
     where: {
@@ -257,6 +285,8 @@ export async function getMobilePunchContext(userId: string): Promise<MobilePunch
     lastPunch,
     todayPunches,
     nextAction,
+    activeMission,
+    geofenceRelaxed,
   };
 }
 
@@ -284,8 +314,12 @@ export async function submitMobilePunch(opts: {
     throw new AppError('Branch coordinates are not configured', 400, 'LOCATION_COORDS_MISSING');
   }
 
+  const context = await getMobilePunchContext(opts.userId);
+  const skipHomeGeofence = context.geofenceRelaxed === true;
+
   const radius = loc.geofenceRadiusMeters ?? 200;
   if (
+    !skipHomeGeofence &&
     !isWithinGeofence({
       userLat: opts.latitude,
       userLng: opts.longitude,
@@ -301,7 +335,6 @@ export async function submitMobilePunch(opts: {
     );
   }
 
-  const context = await getMobilePunchContext(opts.userId);
   if (opts.isCheckIn && context.nextAction === 'check_out') {
     throw new AppError('Already checked in — use check-out', 400, 'ALREADY_CHECKED_IN');
   }
@@ -312,6 +345,14 @@ export async function submitMobilePunch(opts: {
   const punchTime = opts.clientPunchAt ?? new Date();
   const companyId = getCompanyId() ?? employee.companyId;
 
+  const { resolveLocationDisplayName } = await import('./locationDisplayName.service');
+  const locationDisplayName = await resolveLocationDisplayName({
+    companyId,
+    latitude: opts.latitude,
+    longitude: opts.longitude,
+    homeBranchName: loc.name,
+  });
+
   const row = await prisma.transaction.create({
     data: {
       companyId,
@@ -320,10 +361,13 @@ export async function submitMobilePunch(opts: {
       punchTime,
       punchState: opts.isCheckIn ? PUNCH_STATE_CHECK_IN : PUNCH_STATE_CHECK_OUT,
       terminalSn: MOBILE_GEO_TERMINAL_SN,
-      terminalAlias: loc.name,
+      terminalAlias: skipHomeGeofence
+        ? locationDisplayName || loc.name
+        : loc.name,
       punchSource: PUNCH_SOURCE_MOBILE,
       latitude: opts.latitude,
       longitude: opts.longitude,
+      locationDisplayName,
       isDuplicate: false,
     },
   });
@@ -342,10 +386,13 @@ export async function submitMobilePunch(opts: {
       punchSource: row.punchSource,
       latitude: row.latitude,
       longitude: row.longitude,
+      locationDisplayName: row.locationDisplayName,
       terminalSn: row.terminalSn,
       terminalAlias: row.terminalAlias,
       isCheckIn: opts.isCheckIn,
     },
+    activeMission: context.activeMission,
+    geofenceRelaxed: skipHomeGeofence,
     company: employee.company
       ? { id: employee.company.id, code: employee.company.code, name: employee.company.name }
       : null,

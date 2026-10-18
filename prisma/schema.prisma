@@ -81,6 +81,14 @@ enum AdvanceRequestState {
   cancelled
 }
 
+/// Field mission (مأمورية) — branch manager is the final approver (no HR step).
+enum FieldMissionRequestState {
+  pending_branch
+  approved
+  rejected
+  cancelled
+}
+
 enum CompanyFeatureSource {
   PLAN_SNAPSHOT
   ADMIN_OVERRIDE
@@ -152,6 +160,7 @@ model Company {
   leaveRequests              LeaveRequest[]
   loanRequests               LoanRequest[]
   advanceRequests            AdvanceRequest[]
+  fieldMissionRequests       FieldMissionRequest[]
   shiftChangeRequests        ShiftChangeRequest[]
   salaryRequests             SalaryRequest[]
   certificateRequests        CertificateRequest[]
@@ -444,6 +453,7 @@ model EmployeeProfile {
   leaveRequests           LeaveRequest[]
   loanRequests            LoanRequest[]
   advanceRequests         AdvanceRequest[]
+  fieldMissionRequests    FieldMissionRequest[]
   managedLocations        Location[]              @relation("LocationManager")
   shiftChangeRequests     ShiftChangeRequest[]
   salaryRequests          SalaryRequest[]
@@ -528,9 +538,10 @@ model Location {
   shiftGrids         ShiftGrid[]
   users              User[]
   devices            Device[]
-  hiringAppointments HiringAppointment[]
-  advanceRequests    AdvanceRequest[]
-  company            Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  hiringAppointments   HiringAppointment[]
+  advanceRequests      AdvanceRequest[]
+  fieldMissionRequests FieldMissionRequest[]
+  company              Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@unique([companyId, code])
   @@index([managerEmployeeId])
@@ -804,6 +815,8 @@ model Transaction {
   punchSource          String?  @map("punch_source")
   latitude             Float?
   longitude            Float?
+  /// Human-readable place for mobile_geo punches (branch snap or reverse geocode).
+  locationDisplayName  String?  @map("location_display_name")
   isDuplicate          Boolean  @default(false) @map("is_duplicate")
   duplicateOfId        String?  @map("duplicate_of_id")
   createdAt            DateTime @default(now()) @map("created_at")
@@ -993,15 +1006,20 @@ model ShiftGridLine {
   isWorkAbsence   Boolean  @default(false) @map("is_work_absence")
   isWorkInjury    Boolean  @default(false) @map("is_work_injury")
   isMarriageLeave Boolean  @default(false) @map("is_marriage_leave")
+  /// Approved field mission day — visual marker only; does not create punches.
+  isFieldMission          Boolean @default(false) @map("is_field_mission")
+  fieldMissionRequestId   String? @map("field_mission_request_id")
 
-  grid     ShiftGrid       @relation(fields: [gridId], references: [id], onDelete: Cascade)
-  employee EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  shift    Shift?          @relation(fields: [shiftId], references: [id])
-  company  Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  grid                 ShiftGrid            @relation(fields: [gridId], references: [id], onDelete: Cascade)
+  employee             EmployeeProfile      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift                Shift?               @relation(fields: [shiftId], references: [id])
+  fieldMissionRequest  FieldMissionRequest? @relation(fields: [fieldMissionRequestId], references: [id], onDelete: SetNull)
+  company              Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@unique([gridId, employeeId, date])
   @@index([companyId])
   @@index([companyId, gridId, employeeId, date])
+  @@index([fieldMissionRequestId])
   @@map("shift_grid_lines")
 }
 
@@ -1304,6 +1322,8 @@ model AdvanceLoanImport {
   notificationEmailError      String?                @map("notification_email_error")
   notificationEmailRecipients String[]               @default([]) @map("notification_email_recipients")
   kind                        String                 @default("loan")
+  /// `sheet` = Excel import; `manual` = open batch of HR-created short advances.
+  source                      String                 @default("sheet")
   /// Frozen Cash/Fawry totals after approve/send — not recalculated from live employee Fawry flags.
   cashAmount                  Float?                 @map("cash_amount")
   fawryAmount                 Float?                 @map("fawry_amount")
@@ -1316,6 +1336,7 @@ model AdvanceLoanImport {
   company    Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@index([companyId])
+  @@index([companyId, source, state])
   @@map("advance_loan_imports")
 }
 
@@ -1525,6 +1546,40 @@ model AdvanceRequest {
   @@index([state, locationId])
   @@index([companyId])
   @@map("advance_requests")
+}
+
+/// Employee field-mission request. Branch manager approve marks shift-grid days;
+/// does not create Transaction rows. GPS punch may skip home geofence while approved.
+model FieldMissionRequest {
+  companyId     String                   @map("company_id")
+  id            String                   @id @default(cuid())
+  employeeId    String                   @map("employee_id")
+  requestedById String                   @map("requested_by_id")
+  /// Frozen at submit for branch-manager queue stability.
+  locationId    String?                  @map("location_id")
+  details       String
+  dateFrom      DateTime                 @map("date_from") @db.Date
+  dateTo        DateTime                 @map("date_to") @db.Date
+  state         FieldMissionRequestState @default(pending_branch)
+
+  branchApprovedById String?   @map("branch_approved_by_id")
+  branchApprovedAt   DateTime? @map("branch_approved_at")
+  rejectedById       String?   @map("rejected_by_id")
+  rejectionReason    String?   @map("rejection_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  employee   EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  location   Location?       @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  gridLines  ShiftGridLine[]
+  company    Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, state])
+  @@index([state, locationId])
+  @@index([companyId])
+  @@index([companyId, dateFrom, dateTo])
+  @@map("field_mission_requests")
 }
 
 model ShiftChangeRequest {

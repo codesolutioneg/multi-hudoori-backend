@@ -81,7 +81,21 @@ async function upsertGridLineForDay(opts: {
     include: { shift: true },
   });
   const flags = parseCellFlags(params, existing?.shiftId ?? null);
-  const lineData = flagsToLineData(flags);
+  // Preserve mission markers unless the caller explicitly sets them (leave/shift
+  // fulfill must not wipe an approved field-mission day).
+  const lineData = {
+    ...flagsToLineData(flags),
+    isFieldMission:
+      params.isFieldMission != null
+        ? Boolean(params.isFieldMission)
+        : (existing?.isFieldMission ?? flags.isFieldMission),
+    fieldMissionRequestId:
+      params.fieldMissionRequestId !== undefined
+        ? (params.fieldMissionRequestId
+            ? String(params.fieldMissionRequestId)
+            : null)
+        : (existing?.fieldMissionRequestId ?? flags.fieldMissionRequestId),
+  };
 
   if (existing) {
     await prisma.shiftGridLine.update({ where: { id: existing.id }, data: lineData });

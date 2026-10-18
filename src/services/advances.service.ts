@@ -2,6 +2,7 @@
  * Odoo parity: biotime_payroll/models/payroll_advances.py + biotime.payroll._apply_advances
  */
 import {
+  AdvanceLoanImportState,
   AdvanceState,
   AdvanceLong,
   AdvanceLongPayment,
@@ -645,7 +646,7 @@ export async function createShortAdvance(params: {
 
   const grantDate = params.date ?? new Date();
   const deductionStart = params.deductionStartDate ?? grantDate;
-  return prisma.advanceShort.create({
+  const created = await prisma.advanceShort.create({
     data: {
       employeeId: params.employeeId,
       amount: params.amount,
@@ -661,8 +662,32 @@ export async function createShortAdvance(params: {
         params.overrideReason,
       ),
     },
-    include: { employee: true },
+    include: {
+      employee: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          hasFawryAccount: true,
+          fawryAccount: true,
+          jobTitle: true,
+          workLocation: { select: { id: true, name: true } },
+        },
+      },
+    },
   });
+
+  // Any non-Excel short advance joins the open manual Odoo batch.
+  try {
+    const { attachShortToOpenManualBatch } = await import(
+      './manualAdvanceBatch.service'
+    );
+    await attachShortToOpenManualBatch(created);
+  } catch {
+    // Batch attach must not roll back the advance itself.
+  }
+
+  return created;
 }
 
 export async function cancelShortAdvance(id: string) {
@@ -681,11 +706,36 @@ export async function cancelShortAdvance(id: string) {
       'ACTION_ERROR',
     );
   }
-  return prisma.advanceShort.update({
+  const cancelled = await prisma.advanceShort.update({
     where: { id },
     data: { state: AdvanceState.cancelled },
     include: { employee: true },
   });
+
+  // Drop from open manual batch line if still draft / unsent.
+  const line = await prisma.advanceLoanImportLine.findFirst({
+    where: { shortAdvanceId: id },
+    include: {
+      import: {
+        select: {
+          id: true,
+          source: true,
+          state: true,
+          odooAccountsSendId: true,
+        },
+      },
+    },
+  });
+  if (
+    line &&
+    line.import.source === 'manual' &&
+    line.import.state === AdvanceLoanImportState.draft &&
+    line.import.odooAccountsSendId == null
+  ) {
+    await prisma.advanceLoanImportLine.delete({ where: { id: line.id } });
+  }
+
+  return cancelled;
 }
 
 export async function createLongAdvance(params: {
@@ -941,7 +991,14 @@ export async function listShortAdvances(state?: AdvanceState) {
         select: {
           shortAdvanceId: true,
           import: {
-            select: { id: true, reference: true, date: true },
+            select: {
+              id: true,
+              reference: true,
+              date: true,
+              state: true,
+              source: true,
+              odooAccountsSendId: true,
+            },
           },
         },
       })

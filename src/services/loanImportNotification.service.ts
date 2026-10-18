@@ -7,6 +7,7 @@ import {
 import {
   buildOdooLoanAccountsExportWorkbook,
   calculateLoanPaymentAmounts,
+  employeeForcedCashChannel,
   type LoanAccountsExportLine,
 } from './odoo/odooLoanAccounts.service';
 import { isLoanNotificationEmailEnabled } from './notificationEmail.service';
@@ -19,18 +20,6 @@ export type LoanImportNotificationResult = {
   sentRecipients: string[];
   failures: Array<{ branchName: string; error: string }>;
 };
-
-function isFawry(
-  employee: {
-    hasFawryAccount: boolean;
-    fawryAccount: string | null;
-  } | null,
-): boolean {
-  return (
-    employee?.hasFawryAccount === true ||
-    Boolean(employee?.fawryAccount?.trim())
-  );
-}
 
 function displayBranchName(
   location:
@@ -81,6 +70,9 @@ export async function sendLoanImportNotifications(
               workPhone: true,
               hasFawryAccount: true,
               fawryAccount: true,
+              active: true,
+              archivedAt: true,
+              departureDate: true,
               workLocation: {
                 select: {
                   id: true,
@@ -120,7 +112,8 @@ export async function sendLoanImportNotifications(
       const trimmed = email.trim().toLowerCase();
       if (trimmed) recipients.add(trimmed);
     }
-    const isFawryPayment = isFawry(line.employee);
+    const isFawryPayment =
+      line.isFawry === true && !employeeForcedCashChannel(line.employee);
     const amounts = calculateLoanPaymentAmounts(
       line.approvedAmount,
       isFawryPayment,

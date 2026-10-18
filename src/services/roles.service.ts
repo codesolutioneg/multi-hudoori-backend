@@ -82,6 +82,7 @@ export function getMenusForUser(
       { id: 'my_attendance', name: 'حضوري', icon: 'schedule', route: '/attendance/my' },
       // The one thing a branch employee may submit, not just read.
       { id: 'my_advance_request', name: 'طلب سلفة', icon: 'request_quote', route: '/my/advance-request' },
+      { id: 'my_field_mission', name: 'طلب مأمورية', icon: 'flight_takeoff', route: '/my/field-mission' },
       { id: 'my_requests', name: 'طلبات', icon: 'assignment', route: '/requests' },
       { id: 'my_payroll', name: 'قسيمة راتبي', icon: 'payments', route: '/payroll/my' },
     );
@@ -96,12 +97,20 @@ export function getMenusForUser(
     // Designated as «مدير الفرع» without carrying the role: they still need the
     // queue to sign off their own branch's requests.
     if (_options?.runsABranch) {
-      menus.push({
-        id: 'advance_requests',
-        name: 'طلبات السلف',
-        icon: 'request_quote',
-        route: '/hr/advance-requests',
-      });
+      menus.push(
+        {
+          id: 'advance_requests',
+          name: 'طلبات السلف',
+          icon: 'request_quote',
+          route: '/hr/advance-requests',
+        },
+        {
+          id: 'field_mission_requests',
+          name: 'طلبات المأمورية',
+          icon: 'flight_takeoff',
+          route: '/hr/field-mission-requests',
+        },
+      );
     }
   }
 
@@ -112,6 +121,12 @@ export function getMenusForUser(
       { id: 'shifts', name: 'الشيفتات', icon: 'access_time', route: '/hr/shifts' },
       { id: 'shift_grid', name: 'جدول الشيفتات', icon: 'grid_on', route: '/hr/shift-grid' },
       { id: 'advance_requests', name: 'طلبات السلف', icon: 'request_quote', route: '/hr/advance-requests' },
+      {
+        id: 'field_mission_requests',
+        name: 'طلبات المأمورية',
+        icon: 'flight_takeoff',
+        route: '/hr/field-mission-requests',
+      },
     );
   }
 
@@ -129,6 +144,12 @@ export function getMenusForUser(
         name: 'موافقة الطلبات',
         icon: 'pending_actions',
         route: '/requests',
+      },
+      {
+        id: 'field_mission_requests',
+        name: 'طلبات المأمورية',
+        icon: 'flight_takeoff',
+        route: '/hr/field-mission-requests',
       },
       // { id: 'overtime', name: 'تحليل الإضافي', icon: 'access_time', route: '/hr/overtime' },
       { id: 'deductions', name: 'الاستقطاعات', icon: 'remove_circle_outline', route: '/hr/deductions' },

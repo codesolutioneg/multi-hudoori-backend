@@ -20,6 +20,8 @@ export type CellFlags = {
   isWorkAbsence: boolean;
   isWorkInjury: boolean;
   isMarriageLeave: boolean;
+  isFieldMission: boolean;
+  fieldMissionRequestId: string | null;
 };
 
 import {
@@ -43,6 +45,7 @@ export function formatGridCellLabel(
     | 'isWorkAbsence'
     | 'isWorkInjury'
     | 'isMarriageLeave'
+    | 'isFieldMission'
     | 'shiftId'
   > & { shift?: Shift | null },
 ): string {
@@ -55,14 +58,19 @@ export function formatGridCellLabel(
   if (line.isWorkAbsence) return 'انقطاع عن العمل';
   if (line.isWorkInjury) return 'اصابه عمل';
   if (line.isMarriageLeave) return 'إجازة جواز';
-  if (line.isPresent && !line.shiftId) return 'حاضر';
+  if (line.isFieldMission && !line.shiftId && !line.isPresent) return 'م';
+  if (line.isPresent && !line.shiftId) {
+    return line.isFieldMission ? 'حاضر م' : 'حاضر';
+  }
   if (line.shift) {
     const label = `${line.shift.code ?? ''} - ${line.shift.name ?? ''}`.trim();
-    if (line.isPresent) return `حاضر ${label}`;
-    if (line.isBusDelay) return `تأخير باص ${label}`;
-    return label;
+    const withMission = line.isFieldMission ? `${label} م` : label;
+    if (line.isPresent) return `حاضر ${withMission}`;
+    if (line.isBusDelay) return `تأخير باص ${withMission}`;
+    return withMission;
   }
-  if (line.isBusDelay) return 'تأخير باص';
+  if (line.isBusDelay) return line.isFieldMission ? 'تأخير باص م' : 'تأخير باص';
+  if (line.isFieldMission) return 'م';
   return '';
 }
 
@@ -82,6 +90,7 @@ export function parseCellFlags(params: Record<string, unknown>, currentShiftId?:
     let isWorkAbsence = false;
     let isWorkInjury = false;
     let isMarriageLeave = false;
+    let isFieldMission = false;
 
     // Explicit clear from the grid cell editor.
     if (v === 'clear' || v === 'none' || v === 'empty') {
@@ -98,6 +107,8 @@ export function parseCellFlags(params: Record<string, unknown>, currentShiftId?:
         isWorkAbsence: false,
         isWorkInjury: false,
         isMarriageLeave: false,
+        isFieldMission: false,
+        fieldMissionRequestId: null,
       };
     }
 
@@ -122,6 +133,8 @@ export function parseCellFlags(params: Record<string, unknown>, currentShiftId?:
     } else if (v === 'marriage' || v === 'marriage_leave') {
       isMarriageLeave = true;
       isPresent = true;
+    } else if (v === 'mission' || v === 'field_mission') {
+      isFieldMission = true;
     } else if (v.startsWith('bus_')) {
       isBusDelay = true;
       shiftId = v.slice(4) || null;
@@ -142,6 +155,8 @@ export function parseCellFlags(params: Record<string, unknown>, currentShiftId?:
       isWorkAbsence,
       isWorkInjury,
       isMarriageLeave,
+      isFieldMission,
+      fieldMissionRequestId: null,
     };
   }
 
@@ -159,6 +174,11 @@ export function parseCellFlags(params: Record<string, unknown>, currentShiftId?:
     isWorkAbsence: Boolean(params.isWorkAbsence),
     isWorkInjury: Boolean(params.isWorkInjury),
     isMarriageLeave: Boolean(params.isMarriageLeave),
+    isFieldMission: Boolean(params.isFieldMission),
+    fieldMissionRequestId:
+      params.fieldMissionRequestId != null && params.fieldMissionRequestId !== ''
+        ? String(params.fieldMissionRequestId)
+        : null,
   };
 }
 
@@ -176,6 +196,8 @@ export function flagsToLineData(flags: CellFlags) {
     isWorkAbsence: flags.isWorkAbsence,
     isWorkInjury: flags.isWorkInjury,
     isMarriageLeave: flags.isMarriageLeave,
+    isFieldMission: flags.isFieldMission,
+    fieldMissionRequestId: flags.fieldMissionRequestId,
   };
 }
 
@@ -271,6 +293,8 @@ export function gridCellFromLine(line: ShiftGridLine & { shift?: Shift | null })
     is_work_absence: line.isWorkAbsence,
     is_work_injury: line.isWorkInjury,
     is_marriage_leave: line.isMarriageLeave,
+    is_field_mission: line.isFieldMission,
+    field_mission_request_id: line.fieldMissionRequestId ?? null,
     display_label: formatGridCellLabel(line),
   };
 }
@@ -288,7 +312,8 @@ export function lineHasAssignment(line: ShiftGridLine): boolean {
       || line.isResignation
       || line.isWorkAbsence
       || line.isWorkInjury
-      || line.isMarriageLeave,
+      || line.isMarriageLeave
+      || line.isFieldMission,
   );
 }
 
@@ -608,6 +633,8 @@ function lineToCellFlags(line: ShiftGridLine): CellFlags {
     isWorkAbsence: line.isWorkAbsence,
     isWorkInjury: line.isWorkInjury,
     isMarriageLeave: line.isMarriageLeave,
+    isFieldMission: line.isFieldMission,
+    fieldMissionRequestId: line.fieldMissionRequestId,
   };
 }
 

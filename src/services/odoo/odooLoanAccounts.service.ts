@@ -278,15 +278,46 @@ export type LoanAccountsExportLine = {
   approvedAmount: number;
 };
 
+/**
+ * Archived / inactive / departed staff are always paid كاش (same idea as payroll
+ * `isResigned`). Restored employees keep `archivedAt` as audit trail but stay
+ * eligible for فوري when `active` and no `departureDate`.
+ */
+export function employeeForcedCashChannel(
+  employee:
+    | {
+        active?: boolean | null;
+        archivedAt?: Date | string | null;
+        departureDate?: Date | string | null;
+      }
+    | null
+    | undefined,
+): boolean {
+  if (!employee) return false;
+  if (employee.active === true && !employee.departureDate) return false;
+  if (employee.active === false) return true;
+  if (employee.departureDate != null && String(employee.departureDate).trim() !== '') {
+    return true;
+  }
+  if (employee.archivedAt != null && String(employee.archivedAt).trim() !== '') {
+    return true;
+  }
+  return false;
+}
+
 export function employeeIsFawry(
   employee:
     | {
         hasFawryAccount: boolean;
         fawryAccount: string | null;
+        active?: boolean | null;
+        archivedAt?: Date | string | null;
+        departureDate?: Date | string | null;
       }
     | null
     | undefined,
 ): boolean {
+  if (employeeForcedCashChannel(employee)) return false;
   return (
     employee?.hasFawryAccount === true ||
     Boolean(employee?.fawryAccount?.trim())
@@ -401,6 +432,9 @@ async function loadLoanAccountsExportLines(importId: string): Promise<{
               workPhone: true,
               hasFawryAccount: true,
               fawryAccount: true,
+              active: true,
+              archivedAt: true,
+              departureDate: true,
               workLocation: { select: { name: true, actualName: true } },
             },
           },
@@ -418,7 +452,9 @@ async function loadLoanAccountsExportLines(importId: string): Promise<{
     employeeName: line.employeeName ?? line.employee?.name ?? '',
     jobTitle: line.employee?.jobTitle ?? '',
     phone: line.employee?.mobilePhone || line.employee?.workPhone || '',
-    isFawry: line.isFawry === true,
+    // Archived / inactive always كاش even if the frozen line said فوري.
+    isFawry:
+      line.isFawry === true && !employeeForcedCashChannel(line.employee),
     approvedAmount: line.approvedAmount,
   }));
 

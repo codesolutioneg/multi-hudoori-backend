@@ -22,6 +22,7 @@ import {
   sendLoanImportNotifications,
 } from "../../services/loanImportNotification.service";
 import * as odooLoanAccounts from "../../services/odoo/odooLoanAccounts.service";
+import * as manualAdvanceBatch from "../../services/manualAdvanceBatch.service";
 
 const router = Router();
 
@@ -30,6 +31,41 @@ function optionalIsoDate(value: unknown): string | undefined {
   const s = String(value).trim().slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : undefined;
 }
+
+router.post(
+  "/advances/loan-import/open-manual",
+  requireAuth,
+  requireHr,
+  asyncHandler(async (req, res) => {
+    const result = await manualAdvanceBatch.getOpenManualBatchPayload();
+    jsonRpcSuccess(res, biotimeOk(result), req.rpcId);
+  }),
+);
+
+router.post(
+  "/advances/loan-import/send-manual-to-odoo",
+  requireAuth,
+  requireHr,
+  asyncHandler(async (req, res) => {
+    const result = await manualAdvanceBatch.lockAndSendOpenManualBatchToOdoo();
+    const importId = result.import?.id ?? "";
+    const email = importId
+      ? queueLoanImportNotifications(importId)
+      : { queued: false };
+    const response = { ...result, email };
+    await writeAudit({
+      req,
+      module: "advances",
+      action: "advances.manual_batch.send_odoo",
+      entityType: "AdvanceLoanImport",
+      entityId: importId,
+      summary: `إرسال سلف يدوية للحسابات في Odoo: ${result.name}`,
+      payload: response as unknown as Record<string, unknown>,
+      route: "/advances/loan-import/send-manual-to-odoo",
+    });
+    jsonRpcSuccess(res, biotimeOk(response), req.rpcId);
+  }),
+);
 
 router.post(
   "/advances/loan-import/get",

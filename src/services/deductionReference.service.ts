@@ -46,3 +46,21 @@ export async function nextTipImportReference(date = new Date()): Promise<string>
   const seq = String(row.value).padStart(5, '0');
   return `TIP/${year}/${seq}`;
 }
+
+/** Open / sent batches of HR-created short advances (not Excel imports). */
+export async function nextManualAdvanceBatchReference(
+  date = new Date(),
+): Promise<string> {
+  const year = date.getUTCFullYear();
+  const counterId = `manual_loan_batch_${year}`;
+  const companyId = requireCompanyId();
+
+  const row = await prisma.systemCounter.upsert({
+    where: { companyId_id: { companyId, id: counterId } },
+    create: { companyId, id: counterId, value: 1 },
+    update: { value: { increment: 1 } },
+  });
+
+  const seq = String(row.value).padStart(5, '0');
+  return `MANUAL/${year}/${seq}`;
+}
