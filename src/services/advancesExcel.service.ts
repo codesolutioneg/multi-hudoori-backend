@@ -144,6 +144,8 @@ export const TIP_EXTRA_UNLOCKED_ROWS = 25;
 /** Import template for a branch (location) — employees prefilled; fill amount to import. */
 export async function exportAdvancesImportTemplateXlsx(options?: {
   locationId?: string | null;
+  /** Prefill by employee codes (any branches). Takes precedence over locationId. */
+  employeeCodes?: string[] | null;
   /** When true, empty branch returns null instead of throwing (used by bulk ZIP). */
   allowEmpty?: boolean;
   /** Empty workbook to fill by hand; filename is always multiple.xlsx */
@@ -158,6 +160,7 @@ export async function exportAdvancesImportTemplateXlsx(options?: {
   filename: string;
   count: number;
   locationName: string;
+  missingCodes?: string[];
 } | null> {
   const blank = options?.blank === true;
   const kind: ImportTemplateKind =
@@ -165,10 +168,19 @@ export async function exportAdvancesImportTemplateXlsx(options?: {
       ? 'tip'
       : 'loan';
   const spec = importTemplateSpec(kind);
-  const locationId = blank ? null : options?.locationId?.trim() || null;
+  const requestedCodes = [
+    ...new Set(
+      (options?.employeeCodes ?? [])
+        .map((c) => String(c ?? '').trim())
+        .filter(Boolean),
+    ),
+  ];
+  const byCodes = !blank && requestedCodes.length > 0;
+  const locationId = blank || byCodes ? null : options?.locationId?.trim() || null;
   const allowEmpty = options?.allowEmpty === true;
   let locationName = 'all';
   let locationLabel = 'all';
+  let missingCodes: string[] = [];
 
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet(spec.sheetName);
@@ -184,7 +196,66 @@ export async function exportAdvancesImportTemplateXlsx(options?: {
 
   let employees: ImportTemplateEmployee[] = [];
 
-  if (locationId) {
+  if (byCodes) {
+    locationLabel = 'selected';
+    locationName = 'selected';
+    const rows = await prisma.employeeProfile.findMany({
+      where: {
+        ...(kind === 'tip' ? {} : { active: true }),
+        OR: [
+          { code: { in: requestedCodes } },
+          { identificationId: { in: requestedCodes } },
+          { barcode: { in: requestedCodes } },
+        ],
+      },
+      select: {
+        id: true,
+        code: true,
+        identificationId: true,
+        barcode: true,
+        name: true,
+        hiringDate: true,
+        jobTitle: true,
+        department: { select: { name: true } },
+      },
+    });
+    const byKey = new Map<string, (typeof rows)[number]>();
+    for (const e of rows) {
+      for (const key of [e.code, e.identificationId, e.barcode]) {
+        const k = (key || '').trim();
+        if (k && !byKey.has(k)) byKey.set(k, e);
+      }
+    }
+    const ordered: ImportTemplateEmployee[] = [];
+    const seenIds = new Set<string>();
+    for (const code of requestedCodes) {
+      const e = byKey.get(code);
+      if (!e) {
+        missingCodes.push(code);
+        continue;
+      }
+      if (seenIds.has(e.id)) continue;
+      seenIds.add(e.id);
+      ordered.push({
+        id: e.id,
+        code: (e.code || e.identificationId || code).trim(),
+        name: (e.name || '').trim(),
+        department: (e.department?.name || '').trim(),
+        jobTitle: (e.jobTitle || '').trim(),
+        hiringDate: e.hiringDate ? e.hiringDate.toISOString().slice(0, 10) : '',
+      });
+    }
+    employees = ordered.filter((e) => e.code);
+    if (employees.length === 0) {
+      throw new AppError(
+        `لا يوجد موظفون مطابقون للأكواد: ${missingCodes.slice(0, 8).join('، ')}${
+          missingCodes.length > 8 ? '…' : ''
+        }`,
+        400,
+        'VALIDATION_ERROR',
+      );
+    }
+  } else if (locationId) {
     const loc = await prisma.location.findUnique({ where: { id: locationId } });
     if (!loc) {
       throw new NotFoundError('Location not found');
@@ -259,38 +330,38 @@ export async function exportAdvancesImportTemplateXlsx(options?: {
       }
     }
 
-    if (kind === 'tip' && employees.length > 0) {
-      const rawFrom = options?.dateFrom;
-      const rawTo = options?.dateTo;
-      if (!rawFrom || !rawTo) {
-        throw new AppError(
-          'حدد فترة أيام العمل من وإلى قبل تنزيل القالب',
-          400,
-          'VALIDATION_ERROR',
-        );
-      }
-      const dateFrom = new Date(`${String(rawFrom).slice(0, 10)}T00:00:00.000Z`);
-      const dateTo = new Date(`${String(rawTo).slice(0, 10)}T00:00:00.000Z`);
-      if (Number.isNaN(dateFrom.getTime()) || Number.isNaN(dateTo.getTime())) {
-        throw new AppError('فترة أيام العمل غير صالحة', 400, 'VALIDATION_ERROR');
-      }
-      const span = calendarPeriodDays(dateFrom, dateTo);
-      const daysById = await tipsWorkingDaysByEmployeeIds(
-        employees.map((e) => e.id!).filter(Boolean),
-        {
-          dateFrom,
-          dateTo,
-          includeInactive: true,
-        },
+  }
+
+  if ((locationId || byCodes) && kind === 'tip' && employees.length > 0) {
+    const rawFrom = options?.dateFrom;
+    const rawTo = options?.dateTo;
+    if (!rawFrom || !rawTo) {
+      throw new AppError(
+        'حدد فترة أيام العمل من وإلى قبل تنزيل القالب',
+        400,
+        'VALIDATION_ERROR',
       );
-      employees = employees
-        .map((e) => ({
-          ...e,
-          workingDays: Math.min(e.id ? daysById.get(e.id) ?? 0 : 0, span),
-        }))
-        .filter((e) => (e.workingDays ?? 0) > 0);
-      // Empty branch still gets a file (headers + extra rows) when exporting many locations.
     }
+    const dateFrom = new Date(`${String(rawFrom).slice(0, 10)}T00:00:00.000Z`);
+    const dateTo = new Date(`${String(rawTo).slice(0, 10)}T00:00:00.000Z`);
+    if (Number.isNaN(dateFrom.getTime()) || Number.isNaN(dateTo.getTime())) {
+      throw new AppError('فترة أيام العمل غير صالحة', 400, 'VALIDATION_ERROR');
+    }
+    const span = calendarPeriodDays(dateFrom, dateTo);
+    const daysById = await tipsWorkingDaysByEmployeeIds(
+      employees.map((e) => e.id!).filter(Boolean),
+      {
+        dateFrom,
+        dateTo,
+        includeInactive: true,
+      },
+    );
+    employees = employees
+      .map((e) => ({
+        ...e,
+        workingDays: Math.min(e.id ? daysById.get(e.id) ?? 0 : 0, span),
+      }))
+      .filter((e) => (e.workingDays ?? 0) > 0);
   }
 
   employees.forEach((e, idx) => {
@@ -327,7 +398,8 @@ export async function exportAdvancesImportTemplateXlsx(options?: {
   }
 
   // Blank / mixed-branch template: unlocked rows so HR can type codes and amounts.
-  if (blank || !locationId) {
+  // Keep prefilled rows when exporting by specific employee codes.
+  if (blank || (!locationId && !byCodes)) {
     const lastBlank = BLANK_IMPORT_ROWS + 1;
     for (let r = 2; r <= lastBlank; r++) {
       for (let c = 1; c <= spec.colCount; c++) {
@@ -419,14 +491,17 @@ export async function exportAdvancesImportTemplateXlsx(options?: {
     options?.filenamePrefix || (kind === 'tip' ? 'tips_import' : 'advances_import');
   const filename = blank
     ? 'multiple.xlsx'
-    : locationId
-      ? `${prefix}_${locationName}_${day}.xlsx`
-      : `${prefix}_template_${day}.xlsx`;
+    : byCodes
+      ? `${prefix}_selected_${day}.xlsx`
+      : locationId
+        ? `${prefix}_${locationName}_${day}.xlsx`
+        : `${prefix}_template_${day}.xlsx`;
   return {
     base64,
     filename,
     count: employees.length,
     locationName: blank ? 'multiple' : locationLabel,
+    ...(missingCodes.length ? { missingCodes } : {}),
   };
 }
 

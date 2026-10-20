@@ -8,6 +8,10 @@ import { AppError, NotFoundError } from '../utils/errors';
 import { utcDateOnly } from '../utils/payrollPeriod';
 import { logger } from '../utils/logger';
 import { invalidateNoPunchCache } from './noPunchAlerts.service';
+import {
+  assertCanCreateEmployees,
+  quotaErrorFromDb,
+} from './licenseQuota.service';
 
 const EMPLOYEE_INCLUDE = { department: true, mapping: true, workLocation: true } as const;
 
@@ -76,24 +80,36 @@ export async function archiveEmployee(
 export async function restoreEmployee(employeeId: string) {
   const existing = await prisma.employeeProfile.findUnique({
     where: { id: employeeId },
-    select: { id: true, userId: true },
+    select: { id: true, userId: true, companyId: true, active: true },
   });
   if (!existing) throw new NotFoundError('Employee not found');
 
-  const employee = await prisma.$transaction(async (tx) => {
-    // archivedAt / archiveReason are kept on purpose as an audit trail.
-    const updated = await tx.employeeProfile.update({
-      where: { id: employeeId },
-      data: { active: true, departureDate: null },
-      include: EMPLOYEE_INCLUDE,
+  // Restoring re-takes a seat (archived/inactive rows are excluded from the cap).
+  if (!existing.active) {
+    await assertCanCreateEmployees(existing.companyId, 1);
+  }
+
+  let employee;
+  try {
+    employee = await prisma.$transaction(async (tx) => {
+      // archivedAt / archiveReason are kept on purpose as an audit trail.
+      const updated = await tx.employeeProfile.update({
+        where: { id: employeeId },
+        data: { active: true, departureDate: null },
+        include: EMPLOYEE_INCLUDE,
+      });
+
+      if (existing.userId) {
+        await tx.user.update({ where: { id: existing.userId }, data: { active: true } });
+      }
+
+      return updated;
     });
-
-    if (existing.userId) {
-      await tx.user.update({ where: { id: existing.userId }, data: { active: true } });
-    }
-
-    return updated;
-  });
+  } catch (err) {
+    const quota = quotaErrorFromDb(err);
+    if (quota) throw quota;
+    throw err;
+  }
 
   invalidateNoPunchCache();
   logger.info({ employeeId }, 'Employee restored from archive');

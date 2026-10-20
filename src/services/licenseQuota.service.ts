@@ -2,8 +2,11 @@ import { PrismaClient, UserRole } from '@prisma/client';
 import { AppError } from '../utils/errors';
 
 /**
- * SaaS seats per company. The DB triggers (migration 20260930120000) are the hard lock;
- * these helpers give a friendly error before the insert and let bulk flows pre-check.
+ * SaaS seats per company. The DB triggers are the hard lock;
+ * these helpers give a friendly error before insert/restore and let bulk flows pre-check.
+ *
+ * Employee seats count **active** profiles only (`active: true`). Archiving frees a seat;
+ * restoring from archive consumes one again. `archivedAt` can remain as audit after restore.
  */
 
 export const EMPLOYEE_QUOTA_EXCEEDED = 'EMPLOYEE_QUOTA_EXCEEDED';
@@ -14,6 +17,9 @@ export const SEATLESS_ROLES: ReadonlySet<string> = new Set([
   UserRole.EMPLOYEE,
   UserRole.PLATFORM_ADMIN,
 ]);
+
+/** Prisma where-clause: profiles that consume an employee seat. */
+export const EMPLOYEE_SEAT_WHERE = { active: true } as const;
 
 export function roleTakesSeat(role: string | null | undefined): boolean {
   return !SEATLESS_ROLES.has(role ?? UserRole.EMPLOYEE);
@@ -36,7 +42,7 @@ export class QuotaExceededError extends AppError {
   ) {
     super(
       kind === 'employees'
-        ? `وصلت الشركة للحد الأقصى للموظفين (${max}). الأرشفة لا تحرّر مقعداً — راجع مدير المنصة.`
+        ? `وصلت الشركة للحد الأقصى للموظفين النشطين (${max}). الأرشفة تحرّر مقعداً، والاستعادة تتطلب مقعداً متاحاً — راجع مدير المنصة.`
         : `وصلت الشركة للحد الأقصى للمستخدمين (${max}). راجع مدير المنصة.`,
       400,
       kind === 'employees' ? EMPLOYEE_QUOTA_EXCEEDED : USER_QUOTA_EXCEEDED,
@@ -67,7 +73,9 @@ export async function getQuotaSnapshot(companyId: string, db?: Db): Promise<Quot
       where: { id: companyId },
       select: { maxEmployees: true, maxUsers: true },
     }),
-    client.employeeProfile.count({ where: { companyId } }),
+    client.employeeProfile.count({
+      where: { companyId, ...EMPLOYEE_SEAT_WHERE },
+    }),
     client.user.count({
       where: { companyId, role: { notIn: [...SEATLESS_ROLES] as UserRole[] } },
     }),

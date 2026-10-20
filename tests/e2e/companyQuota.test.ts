@@ -67,16 +67,32 @@ describe('company seat quotas', () => {
     await expect(assertCanCreateDashboardUsers(companyId, 2)).rejects.toBeInstanceOf(QuotaExceededError);
   });
 
-  it('rejects an employee past the cap via the API and archiving does not free a seat', async () => {
-    const { hr } = await seedCompany(2, null);
+  it('counts active seats only — archiving frees a seat; restore respects the cap', async () => {
+    const { companyId, hr } = await seedCompany(2, null);
     const first = expectOk(
       await rpc('/api/biotime/employees/create', { name: 'First Person', nationalIdConfirm: NID_MALE }, hr.token),
     );
     const firstId = String((first.employee as { id: string }).id);
-    await prismaBase.employeeProfile.update({ where: { id: firstId }, data: { active: false } });
 
+    // At cap (HR profile + First). Archiving First frees a seat.
+    await prismaBase.employeeProfile.update({
+      where: { id: firstId },
+      data: { active: false, archivedAt: new Date() },
+    });
+    expect((await getQuotaSnapshot(companyId)).employeesUsed).toBe(1);
+
+    expectOk(
+      await rpc(
+        '/api/biotime/employees/create',
+        { name: 'Second Person', nationalIdConfirm: NID_FEMALE },
+        hr.token,
+      ),
+    );
+    expect((await getQuotaSnapshot(companyId)).employeesUsed).toBe(2);
+
+    // Restore would exceed the cap while Second is still active.
     expectFail(
-      await rpc('/api/biotime/employees/create', { name: 'Second Person', nationalIdConfirm: NID_FEMALE }, hr.token),
+      await rpc('/api/biotime/employees/restore', { id: firstId }, hr.token),
       'EMPLOYEE_QUOTA_EXCEEDED',
     );
   });
@@ -133,7 +149,7 @@ describe('company seat quotas', () => {
       departments: Array<{ id: string | null; name: string; count: number }>;
     };
     expect(stats.employees).toEqual({ active: 2, archived: 1, total: 3 });
-    expect(stats.quota).toMatchObject({ employeesUsed: 3, employeesMax: 10 });
+    expect(stats.quota).toMatchObject({ employeesUsed: 2, employeesMax: 10 });
     expect(stats.locations).toEqual([
       { id: branch.id, name: 'Strip', count: 1 },
       { id: null, name: '', count: 1 },

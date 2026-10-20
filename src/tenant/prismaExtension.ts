@@ -125,6 +125,8 @@ async function assertSeats(
   if (model === 'EmployeeProfile') {
     const byCompany = new Map<string, number>();
     for (const r of rows) {
+      // Inactive/archived creates do not consume a seat.
+      if (r.active === false) continue;
       const cid = (r.companyId as string | undefined) ?? companyId;
       if (cid) byCompany.set(cid, (byCompany.get(cid) ?? 0) + 1);
     }

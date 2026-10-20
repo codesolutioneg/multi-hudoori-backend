@@ -112,8 +112,11 @@ export async function sendLoanImportNotifications(
       const trimmed = email.trim().toLowerCase();
       if (trimmed) recipients.add(trimmed);
     }
+    // Locked batch: frozen line channel. Draft/other: still respect live archive→cash.
     const isFawryPayment =
-      line.isFawry === true && !employeeForcedCashChannel(line.employee);
+      batch.state === 'locked'
+        ? line.isFawry === true
+        : line.isFawry === true && !employeeForcedCashChannel(line.employee);
     const amounts = calculateLoanPaymentAmounts(
       line.approvedAmount,
       isFawryPayment,

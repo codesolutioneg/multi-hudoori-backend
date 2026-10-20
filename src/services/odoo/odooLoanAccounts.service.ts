@@ -446,15 +446,19 @@ async function loadLoanAccountsExportLines(importId: string): Promise<{
   if (!batch) throw new NotFoundError('سجل استيراد السلف غير موجود');
 
   const deviceName = batch.device?.name ?? '';
+  // Locked sheets already sent — keep frozen isFawry; draft still follows live channel rules.
+  const freezeSnapshot = batch.state === 'locked';
   const lines = batch.lines.map((line) => ({
     deviceName,
     employeeCode: line.employeeCode ?? line.employee?.code ?? '',
-    employeeName: line.employeeName ?? line.employee?.name ?? '',
+    employeeName: freezeSnapshot
+      ? (line.employeeName?.trim() || line.employee?.name || '')
+      : (line.employeeName ?? line.employee?.name ?? ''),
     jobTitle: line.employee?.jobTitle ?? '',
     phone: line.employee?.mobilePhone || line.employee?.workPhone || '',
-    // Archived / inactive always كاش even if the frozen line said فوري.
-    isFawry:
-      line.isFawry === true && !employeeForcedCashChannel(line.employee),
+    isFawry: freezeSnapshot
+      ? line.isFawry === true
+      : line.isFawry === true && !employeeForcedCashChannel(line.employee),
     approvedAmount: line.approvedAmount,
   }));
 

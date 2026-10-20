@@ -261,9 +261,17 @@ router.post(
   asyncHandler(async (req, res) => {
     const importId = String(p(req).importId ?? p(req).id ?? "");
     const approveConflicts = p(req).approveConflicts === true;
+    const deductionStartRaw =
+      p(req).deductionStartDate ?? p(req).deduction_start_date;
+    const deductionStartIso = deductionStartRaw
+      ? optionalIsoDate(deductionStartRaw)
+      : undefined;
     const result =
       await advanceLoanImportService.approveAdvanceLoanImport(importId, {
         approveConflicts,
+        deductionStartDate: deductionStartIso
+          ? new Date(`${deductionStartIso}T00:00:00.000Z`)
+          : null,
       });
     await writeAudit({
       req,
@@ -481,6 +489,41 @@ router.post(
           count: result.count,
           fileCount: 1,
           skipped: [],
+        }),
+        req.rpcId,
+      );
+      return;
+    }
+    const employeeCodes = Array.isArray(params.employeeCodes)
+      ? params.employeeCodes
+          .map(String)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    if (employeeCodes.length) {
+      const result =
+        await advancesExcelService.exportAdvancesImportTemplateXlsx({
+          employeeCodes,
+          kind: isTips ? "tip" : "loan",
+          filenamePrefix: isTips ? "tips_import" : undefined,
+          dateFrom,
+          dateTo,
+        });
+      if (!result) {
+        throw new AppError("تعذر إنشاء القالب", 400, "VALIDATION_ERROR");
+      }
+      jsonRpcSuccess(
+        res,
+        biotimeOk({
+          file: result.base64,
+          base64: result.base64,
+          filename: result.filename,
+          mimeType:
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          count: result.count,
+          fileCount: 1,
+          skipped: [],
+          missingCodes: result.missingCodes ?? [],
         }),
         req.rpcId,
       );

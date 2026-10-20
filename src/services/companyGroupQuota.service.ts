@@ -252,8 +252,9 @@ export async function countGroupDashboardUsers(groupCompanyIds: string[]): Promi
 }
 
 export async function countGroupEmployees(groupCompanyIds: string[]): Promise<number> {
+  // Active seats only — archived/inactive profiles do not consume group quota.
   return prismaBase.employeeProfile.count({
-    where: { companyId: { in: groupCompanyIds } },
+    where: { companyId: { in: groupCompanyIds }, active: true },
   });
 }
 

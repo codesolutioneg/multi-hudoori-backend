@@ -300,22 +300,26 @@ export async function syncEmployees(): Promise<number> {
         continue;
       }
 
-      // Always refresh mapping + emp_code (punch identity). Names from BioTime
-      // fill empty locals; HR-owned names (biotimeSynced=false) stay unless empty.
-      const keepLocalName = !employee.biotimeSynced && Boolean(employee.name?.trim());
+      // Always refresh mapping + emp_code (punch identity). Never overwrite an
+      // existing local name/displayName — BioTime often has "User <code>" stubs.
+      // Never overwrite departmentId — HR sets departments locally; BioTime dept
+      // is kept only on EmployeeMapping.biotimeDepartmentId.
+      const localName = employee.name?.trim() || '';
+      const localDisplay = employee.displayName?.trim() || '';
+      const keepLocalName = Boolean(localName);
+      const keepLocalDisplay = Boolean(localDisplay);
       await prisma.employeeProfile.update({
         where: { id: employee.id },
         data: {
           ...(keepLocalName
             ? {}
-            : {
-                name: fullName || employee.name || name,
-                displayName: fullName || employee.displayName || displayName,
-              }),
+            : { name: fullName || name }),
+          ...(keepLocalDisplay
+            ? {}
+            : { displayName: fullName || displayName || localName || name }),
           code: empCode,
           barcode: employee.barcode?.trim() ? employee.barcode : empCode,
           biotimeSynced: true,
-          ...(deptId ? { departmentId: deptId } : {}),
         },
       });
       if (employee.mapping) {

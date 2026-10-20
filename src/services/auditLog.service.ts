@@ -16,7 +16,8 @@ export type AuditModule =
   | 'advances'
   | 'payroll'
   | 'hiring'
-  | 'deductions';
+  | 'deductions'
+  | 'settings';
 
 export type AuditActor = {
   id: string;

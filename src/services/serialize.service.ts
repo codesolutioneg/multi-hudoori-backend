@@ -36,24 +36,32 @@ type EmployeeWithRelations = EmployeeProfile & {
   manager?: EmployeeProfile | null;
 };
 
+function isBioTimeStubName(value: string, code?: string | null): boolean {
+  const s = value.trim();
+  if (!s) return true;
+  if (/^User\s+\d+$/i.test(s)) return true;
+  const c = (code ?? '').trim();
+  return Boolean(c) && s === c;
+}
+
 export function resolveEmployeeDisplayName(
   employee: EmployeeWithRelations,
 ): string {
-  const local = (employee.displayName || employee.name || '').trim();
-
-  // Local edits not yet pushed to BioTime — show saved name, not stale mapping.
-  if (!employee.biotimeSynced && local) return local;
-
   const map = employee.mapping;
+  const code = employee.code ?? map?.biotimeEmpCode ?? '';
+  const local = (employee.displayName || employee.name || '').trim();
   const fromMapping = [map?.firstName, map?.lastName]
     .filter(Boolean)
     .join(' ')
     .trim();
-  if (fromMapping) return fromMapping;
 
-  const code = employee.code ?? map?.biotimeEmpCode ?? '';
-  if (code && local === code) return local;
-  return local || code || '—';
+  // Prefer a real local name. BioTime often stores "User <code>" in mapping —
+  // that must not hide the HR name after pull/restore.
+  if (local && !isBioTimeStubName(local, code)) return local;
+  if (fromMapping && !isBioTimeStubName(fromMapping, code)) return fromMapping;
+  if (local) return local;
+  if (fromMapping) return fromMapping;
+  return code || '—';
 }
 
 export function employeeListJson(employee: EmployeeWithRelations) {

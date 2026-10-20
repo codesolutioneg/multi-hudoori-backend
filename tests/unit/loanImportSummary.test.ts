@@ -75,6 +75,43 @@ describe('summarizeLoanImportBatch', () => {
     expect(summary.fawryAmount).toBe(1001.5);
   });
 
+  it('locked freezeSnapshot keeps فوري after employee archive', () => {
+    const summary = summarizeLoanImportBatch(
+      [
+        {
+          ...line({ approvedAmount: 3500, isFawry: true }),
+          employee: {
+            ...line({ isFawry: true }).employee,
+            active: false,
+            archivedAt: new Date('2026-10-18'),
+            hasFawryAccount: true,
+            fawryAccount: '123',
+          },
+        },
+      ],
+      { freezeSnapshot: true },
+    );
+    expect(summary.cashAmount).toBe(0);
+    expect(summary.fawryApprovedAmount).toBe(3500);
+    expect(summary.fawryCommissionAmount).toBe(5.25);
+    expect(summary.fawryAmount).toBe(3505.25);
+  });
+
+  it('without freeze, archived employee forces كاش even if line said فوري', () => {
+    const summary = summarizeLoanImportBatch([
+      {
+        ...line({ approvedAmount: 3500, isFawry: true }),
+        employee: {
+          ...line({ isFawry: true }).employee,
+          active: false,
+          archivedAt: new Date('2026-10-18'),
+        },
+      },
+    ]);
+    expect(summary.cashAmount).toBe(3500);
+    expect(summary.fawryApprovedAmount).toBe(0);
+  });
+
   it('excludes cancelled short advances from cash/fawry totals', () => {
     const summary = summarizeLoanImportBatch([
       {

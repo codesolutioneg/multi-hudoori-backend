@@ -100,7 +100,7 @@ model Company {
   code      String   @unique
   name      String
   active    Boolean  @default(true)
-  /// SaaS seats: max employee_profiles rows (archived included). Null = unlimited. Enforced by DB trigger.
+  /// SaaS seats: max *active* employee_profiles. Archived/inactive do not count. Null = unlimited. Enforced by DB trigger.
   maxEmployees Int?  @map("max_employees")
   /// SaaS seats: max dashboard users (not EMPLOYEE / PLATFORM_ADMIN). Null = unlimited. Enforced by DB trigger.
   maxUsers     Int?  @map("max_users")

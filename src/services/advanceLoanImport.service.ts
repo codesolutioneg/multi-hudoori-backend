@@ -140,13 +140,31 @@ function importedPersonName(
 function displayLoanEmployeeName(
   stored: string | null | undefined,
   profileName?: string | null,
+  options?: { freezeSnapshot?: boolean },
 ): string {
-  const profile = (profileName ?? '').trim();
-  // Linked employees: profile name is source of truth (avoids sheet redaction).
-  if (profile) return profile;
   const s = (stored ?? '').trim();
-  if (isCorruptImportedName(s)) return '';
-  return s;
+  const storedOk = s && !isCorruptImportedName(s) ? s : '';
+  const profile = (profileName ?? '').trim();
+  // After approve/lock the sheet name must stay as frozen on the line.
+  if (options?.freezeSnapshot) return storedOk || profile;
+  // Draft: linked employees use live profile name (avoids sheet redaction).
+  if (profile) return profile;
+  return storedOk;
+}
+
+/** Draft may follow live employee channel; locked sheets honor frozen line.isFawry only. */
+export function resolveLoanLineIsFawry(
+  line: {
+    isFawry?: boolean | null;
+    employee?: Parameters<typeof employeeForcedCashChannel>[0];
+  },
+  options?: { freezeSnapshot?: boolean; useCurrentEmployeePaymentChannel?: boolean },
+): boolean {
+  if (options?.useCurrentEmployeePaymentChannel && line.employee) {
+    return employeeIsFawry(line.employee as Parameters<typeof employeeIsFawry>[0]);
+  }
+  if (options?.freezeSnapshot) return line.isFawry === true;
+  return line.isFawry === true && !employeeForcedCashChannel(line.employee);
 }
 
 export const LOAN_FILE_AMOUNT_ALIASES = [
@@ -502,11 +520,15 @@ export function advanceLoanImportLineJson(line: {
     departureDate?: Date | string | null;
     workLocation?: { name: string; actualName?: string | null } | null;
   } | null;
-}, options?: { useCurrentEmployeePaymentChannel?: boolean }) {
-  const isFawry =
-    options?.useCurrentEmployeePaymentChannel && line.employee
-      ? employeeIsFawry(line.employee)
-      : line.isFawry === true && !employeeForcedCashChannel(line.employee);
+}, options?: {
+  useCurrentEmployeePaymentChannel?: boolean;
+  freezeSnapshot?: boolean;
+}) {
+  const freezeSnapshot = options?.freezeSnapshot === true;
+  const isFawry = resolveLoanLineIsFawry(line, {
+    freezeSnapshot,
+    useCurrentEmployeePaymentChannel: options?.useCurrentEmployeePaymentChannel,
+  });
   const hiringRaw = line.employee?.hiringDate;
   const hiringDate =
     hiringRaw instanceof Date
@@ -519,7 +541,9 @@ export function advanceLoanImportLineJson(line: {
     importId: line.importId,
     employeeId: line.employeeId,
     employeeCode: line.employeeCode ?? '',
-    employeeName: displayLoanEmployeeName(line.employeeName, line.employee?.name),
+    employeeName: displayLoanEmployeeName(line.employeeName, line.employee?.name, {
+      freezeSnapshot,
+    }),
     jobTitle: line.employee?.jobTitle ?? '',
     locationName: formatLocationDisplay(
       line.employee?.workLocation?.name,
@@ -602,6 +626,7 @@ export async function getAdvanceLoanImport(id: string) {
   if (!batch) throw new NotFoundError('Advance loan import not found');
   const useCurrentPaymentChannel =
     batch.state === AdvanceLoanImportState.draft;
+  const freezeSnapshot = batch.state === AdvanceLoanImportState.locked;
   const enrichedLines = await enrichLoanImportLinesWithShortAdvanceState(batch.lines);
   const summary = summarizeLoanImportBatch(
     enrichedLines.map((line) => ({
@@ -615,23 +640,39 @@ export async function getAdvanceLoanImport(id: string) {
       note: line.note,
       rowReason: line.rowReason,
       repaymentMonths: line.repaymentMonths,
-      isFawry: useCurrentPaymentChannel && line.employee
-        ? employeeIsFawry(line.employee)
-        : line.isFawry === true && !employeeForcedCashChannel(line.employee),
+      isFawry: resolveLoanLineIsFawry(line, {
+        freezeSnapshot,
+        useCurrentEmployeePaymentChannel: useCurrentPaymentChannel,
+      }),
       shortAdvance: line.shortAdvance,
       employee: line.employee,
     })),
+    { freezeSnapshot },
   );
+  // Locked sheets keep the cash/fawry totals frozen at approve time.
+  const frozenTotals =
+    freezeSnapshot &&
+    batch.cashAmount != null &&
+    batch.fawryAmount != null &&
+    batch.totalAmount != null
+      ? {
+          cashAmount: batch.cashAmount,
+          fawryAmount: batch.fawryAmount,
+          totalAmount: batch.totalAmount,
+        }
+      : null;
   return {
     ...advanceLoanImportJson({
       ...batch,
       lines: batch.lines.map((line) =>
         advanceLoanImportLineJson(line, {
           useCurrentEmployeePaymentChannel: useCurrentPaymentChannel,
+          freezeSnapshot,
         }),
       ),
     }),
     ...summary,
+    ...(frozenTotals ?? {}),
   };
 }
 
@@ -713,12 +754,13 @@ export function summarizeLoanImportBatch<
       workLocation?: { id: string; name: string; actualName: string | null } | null;
     } | null;
   },
->(lines: T[]) {
-  /** Archived / inactive / departed always كاش; otherwise honor the line flag. */
-  const resolvedIsFawry = (line: T): boolean => {
-    if (employeeForcedCashChannel(line.employee)) return false;
-    return line.isFawry === true;
-  };
+>(
+  lines: T[],
+  options?: { freezeSnapshot?: boolean },
+) {
+  /** Draft: archived → كاش. Locked: honor frozen line.isFawry only. */
+  const resolvedIsFawry = (line: T): boolean =>
+    resolveLoanLineIsFawry(line, { freezeSnapshot: options?.freezeSnapshot });
 
   const locationCounts = new Map<string, { id: string; name: string; count: number }>();
   for (const line of lines) {
@@ -893,14 +935,28 @@ export async function listAdvanceLoanImports(
       const lines = await enrichLoanImportLinesWithShortAdvanceState(r.lines);
       const useCurrentPaymentChannel =
         r.state === AdvanceLoanImportState.draft;
+      const freezeSnapshot = r.state === AdvanceLoanImportState.locked;
       const summary = summarizeLoanImportBatch(
         lines.map((line) => ({
           ...line,
-          isFawry: useCurrentPaymentChannel && line.employee
-            ? employeeIsFawry(line.employee)
-            : line.isFawry === true && !employeeForcedCashChannel(line.employee),
+          isFawry: resolveLoanLineIsFawry(line, {
+            freezeSnapshot,
+            useCurrentEmployeePaymentChannel: useCurrentPaymentChannel,
+          }),
         })),
+        { freezeSnapshot },
       );
+      const frozenTotals =
+        freezeSnapshot &&
+        r.cashAmount != null &&
+        r.fawryAmount != null &&
+        r.totalAmount != null
+          ? {
+              cashAmount: r.cashAmount,
+              fawryAmount: r.fawryAmount,
+              totalAmount: r.totalAmount,
+            }
+          : null;
       const employeesByCode = new Map<
         string,
         { code: string; name: string; jobTitle: string; amount: number }
@@ -910,8 +966,11 @@ export async function listAdvanceLoanImports(
           .trim()
           .replace(/\.0$/, '');
         if (!code) continue;
-        const name =
-          (line.employee?.name || line.employeeName || '').trim() || code;
+        const name = freezeSnapshot
+          ? displayLoanEmployeeName(line.employeeName, line.employee?.name, {
+              freezeSnapshot: true,
+            }) || code
+          : (line.employee?.name || line.employeeName || '').trim() || code;
         const jobTitle = (line.employee?.jobTitle || '').trim();
         const amount =
           Number(line.approvedAmount) > 0
@@ -945,6 +1004,7 @@ export async function listAdvanceLoanImports(
         notificationEmailError: r.notificationEmailError ?? '',
         createdAt: r.createdAt.toISOString(),
         ...summary,
+        ...(frozenTotals ?? {}),
       };
     }),
   );
@@ -1762,7 +1822,7 @@ export async function updateAdvanceLoanImportLine(
 
 export async function approveAdvanceLoanImport(
   importId: string,
-  options: { approveConflicts?: boolean } = {},
+  options: { approveConflicts?: boolean; deductionStartDate?: Date | null } = {},
 ) {
   const batch = await prisma.advanceLoanImport.findUnique({
     where: { id: importId },
@@ -1805,7 +1865,11 @@ export async function approveAdvanceLoanImport(
     );
   }
 
-  const deductionStart = firstOfNextMonth(batch.date);
+  const deductionStart =
+    options.deductionStartDate &&
+    !Number.isNaN(options.deductionStartDate.getTime())
+      ? options.deductionStartDate
+      : firstOfNextMonth(batch.date);
   const eligPeriod = await eligibilityPeriodForBatch(batch);
   const config = await prisma.bioTimeConfig.findFirst({
     select: { payrollMonthStartDay: true },
@@ -2010,6 +2074,15 @@ export async function approveAdvanceLoanImport(
         }
         continue;
       }
+      const forceOverride =
+        Boolean(options.approveConflicts) || row.requiresLimitOverride;
+      if (forceOverride) {
+        row.requiresLimitOverride = true;
+        if (!(row.overrideReason ?? '').trim()) {
+          row.overrideReason =
+            'اعتماد على أي حال من استيراد السلف رغم عدم الاستحقاق / تجاوز الحد';
+        }
+      }
       try {
         row.eligibility = await assertAdvanceWithinLimit({
           employeeId: row.employeeId,
@@ -2017,16 +2090,27 @@ export async function approveAdvanceLoanImport(
           shiftGridId: eligPeriod.shiftGridId ?? batch.sourceGridId,
           dateFrom: eligPeriod.dateFrom,
           dateTo: eligPeriod.dateTo,
-          limitOverride: row.requiresLimitOverride,
+          limitOverride: forceOverride,
           overrideReason: row.overrideReason,
         });
       } catch (error) {
-        addInvalidLine(
-          row.lineId,
-          `${row.employeeName} (${row.employeeCode}): ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        const message = `${row.employeeName} (${row.employeeCode}): ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        addInvalidLine(row.lineId, message);
+        // Eligibility / limit failures are soft — HR can choose "approve anyway".
+        const code =
+          error instanceof AppError ? error.errorCode : '';
+        if (
+          !options.approveConflicts &&
+          (code === 'NOT_ELIGIBLE' ||
+            code === 'LIMIT_EXCEEDED' ||
+            code === 'OVERRIDE_REASON_REQUIRED' ||
+            message.includes('غير مستحق') ||
+            message.includes('يتجاوز الحد'))
+        ) {
+          overridableConflictLineIds.add(row.lineId);
+        }
       }
     }
   }
