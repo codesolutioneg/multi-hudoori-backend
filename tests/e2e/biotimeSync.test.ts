@@ -10,7 +10,14 @@ import { BioTimeConnector } from '../../src/services/biotime/biotimeConnector.se
 import * as syncService from '../../src/services/biotime/sync.service';
 import { applyDuplicateMarking } from '../../src/services/biotime/transactionDuplicate.service';
 import { expectOk, rpc } from '../helpers/api';
-import { createUser, ensureBioTimeConfig, resetDatabase, type SeededUser } from '../helpers/db';
+import {
+  createUser,
+  ensureBioTimeConfig,
+  resetDatabase,
+  withDefaultTenant,
+  type SeededUser,
+} from '../helpers/db';
+import { deleteEmployee } from '../../src/services/employeeDelete.service';
 import {
   MOCK_DEPARTMENTS,
   MOCK_DEVICES,
@@ -78,6 +85,17 @@ describe('BioTime sync (connector mocked, no outbound calls)', () => {
       await syncService.syncEmployees();
       await syncService.syncEmployees();
       expect(await prisma.employeeProfile.count({ where: { code: 'E1001' } })).toBe(1);
+    });
+
+    it('does not recreate a hard-deleted employee on pull', async () => {
+      await syncService.syncEmployees();
+      const emp = await prisma.employeeProfile.findFirstOrThrow({ where: { code: 'E1001' } });
+      await withDefaultTenant(() => deleteEmployee(emp.id));
+      expect(await prisma.employeeProfile.count({ where: { code: 'E1001' } })).toBe(0);
+      expect(await prisma.bioTimePullExclusion.count()).toBeGreaterThan(0);
+
+      await syncService.syncEmployees();
+      expect(await prisma.employeeProfile.count({ where: { code: 'E1001' } })).toBe(0);
     });
 
     it('links employees to departments pulled from BioTime', async () => {

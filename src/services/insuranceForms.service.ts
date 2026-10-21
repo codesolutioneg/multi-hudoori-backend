@@ -5,10 +5,6 @@ import { InsuranceFormType, Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { AppError } from '../utils/errors';
 import { insuranceWageFromShare } from '../utils/insuranceWage';
-import {
-  isInsuranceExcelPdfAvailable,
-  renderInsuranceFormPdfFromExcel,
-} from './insuranceFormExcelPdf.service';
 import { renderInsuranceFormPdf } from './insuranceFormPdf.service';
 
 export type InsuranceFormPayload = Record<string, unknown>;
@@ -291,25 +287,16 @@ export async function saveInsuranceForm(input: {
 
 export async function generateInsuranceFormPdfBase64(id: string) {
   const form = await getInsuranceForm(id);
-  const meta = {
-    employeeName: form.employeeName,
-    createdAt: form.createdAt,
-    employeeCode: form.employeeCode,
-  };
-  const pdf = isInsuranceExcelPdfAvailable()
-    ? await renderInsuranceFormPdfFromExcel({
-        formType: form.formType,
-        payload: form.payload,
-        meta,
-      })
-    : await renderInsuranceFormPdf({
-        formType: form.formType,
-        payload: form.payload,
-        meta: {
-          ...meta,
-          createdByName: form.createdByName,
-        },
-      });
+  // HTML print layout (Nova-style) — Excel/LibreOffice path retired.
+  const pdf = await renderInsuranceFormPdf({
+    formType: form.formType,
+    payload: form.payload,
+    meta: {
+      employeeName: form.employeeName,
+      createdAt: form.createdAt,
+      createdByName: form.createdByName,
+    },
+  });
   return {
     ...form,
     filename: pdf.filename,

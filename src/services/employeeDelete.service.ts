@@ -1,6 +1,7 @@
 import { UserRole } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { NotFoundError } from '../utils/errors';
+import { recordBioTimePullExclusion } from './biotimePullExclusion.service';
 
 export type DeleteEmployeeResult = {
   employeeId: string;
@@ -14,7 +15,15 @@ export type DeleteEmployeeResult = {
 export async function deleteEmployee(employeeId: string): Promise<DeleteEmployeeResult> {
   const employee = await prisma.employeeProfile.findUnique({
     where: { id: employeeId },
-    select: { id: true, name: true, userId: true, managerId: true },
+    select: {
+      id: true,
+      name: true,
+      userId: true,
+      managerId: true,
+      code: true,
+      barcode: true,
+      mapping: { select: { biotimeEmpId: true, biotimeEmpCode: true } },
+    },
   });
   if (!employee) {
     throw new NotFoundError('Employee not found', 'NOT_FOUND');
@@ -24,6 +33,18 @@ export async function deleteEmployee(employeeId: string): Promise<DeleteEmployee
   let reparentedReports = 0;
 
   await prisma.$transaction(async (tx) => {
+    // Block BioTime pull from recreating this person after hard delete.
+    await recordBioTimePullExclusion(tx, {
+      biotimeEmpId: employee.mapping?.biotimeEmpId,
+      empCode:
+        employee.mapping?.biotimeEmpCode ||
+        employee.code ||
+        employee.barcode ||
+        null,
+      employeeName: employee.name,
+      deletedEmployeeId: employee.id,
+    });
+
     const longAdvanceIds = (
       await tx.advanceLong.findMany({ where: { employeeId }, select: { id: true } })
     ).map((row) => row.id);

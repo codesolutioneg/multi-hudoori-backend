@@ -205,6 +205,10 @@ export function configSettingsJson(
     advanceMinimumWorkingDays: config.advanceMinimumWorkingDays ?? 15,
     advanceEnforceLimit: config.advanceEnforceLimit !== false,
     advanceEligibilitySource: config.advanceEligibilitySource ?? 'punch_report',
+    annualLeaveBalanceEnabled: config.annualLeaveBalanceEnabled === true,
+    annualLeaveDefaultDays: config.annualLeaveDefaultDays ?? 21,
+    annualLeaveCarryOverEnabled: config.annualLeaveCarryOverEnabled === true,
+    annualLeavePayoutEnabled: config.annualLeavePayoutEnabled === true,
     tipJobTitleIds: config.tipJobTitleIds ?? [],
     loanNotificationEmailsEnabled: config.loanNotificationEmailsEnabled !== false,
     // Prefixed to stay unambiguous next to duplicateGraceMinutes.

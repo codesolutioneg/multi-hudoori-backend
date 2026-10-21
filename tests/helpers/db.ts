@@ -36,6 +36,7 @@ const TABLES = [
   'employee_custodies',
   'custody_types',
   'hiring_appointments',
+  'biotime_pull_exclusions',
   'employee_mappings',
   'employee_profiles',
   'department_mappings',

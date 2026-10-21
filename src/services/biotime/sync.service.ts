@@ -11,6 +11,7 @@ import { BioTimeConnector, BioTimeEmployee, BioTimeTransaction } from './biotime
 import { pushPendingEmployeesToBioTime, EmployeePushResult } from './employeePush.service';
 import { applyDuplicateMarking, remarkDuplicatesInRange } from './transactionDuplicate.service';
 import { isQuotaError } from '../licenseQuota.service';
+import { isBioTimePullExcluded } from '../biotimePullExclusion.service';
 
 const JOB_STALE_MS = 2 * 60 * 60 * 1000; // 2 hours
 const TRANSACTION_RANGE_JOB = 'transaction_range';
@@ -228,6 +229,7 @@ export async function syncEmployees(): Promise<number> {
   let quotaReached = false;
   let skippedForQuota = 0;
   let skippedNoCode = 0;
+  let skippedExcluded = 0;
 
   while (page <= 100) {
     const response = await connector.getEmployees(page, 200);
@@ -252,6 +254,11 @@ export async function syncEmployees(): Promise<number> {
       let employee = await findEmployeeForBioTimeRow(row, empCode);
 
       if (!employee) {
+        // Hard-deleted in Hudoori: do not recreate from BioTime.
+        if (await isBioTimePullExcluded(row.id, empCode)) {
+          skippedExcluded++;
+          continue;
+        }
         if (quotaReached) {
           skippedForQuota++;
           continue;
@@ -376,6 +383,12 @@ export async function syncEmployees(): Promise<number> {
     logger.warn(
       { skippedForQuota, companyId: requireCompanyId() },
       'BioTime employee sync: new employees skipped — company employee quota reached',
+    );
+  }
+  if (skippedExcluded > 0) {
+    logger.info(
+      { skippedExcluded, companyId: requireCompanyId() },
+      'BioTime employee sync: skipped hard-deleted employees (pull exclusion)',
     );
   }
 

@@ -136,6 +136,8 @@ model Company {
   departments                Department[]
   departmentMappings         DepartmentMapping[]
   employeeMappings           EmployeeMapping[]
+  /// Hard-deleted locals: BioTime pull must not recreate these emp codes / BioTime ids.
+  bioTimePullExclusions      BioTimePullExclusion[]
   devices                    Device[]
   transactions               Transaction[]
   attendances                Attendance[]
@@ -660,6 +662,14 @@ model BioTimeConfig {
   advanceMinimumWorkingDays    Float     @default(15) @map("advance_minimum_working_days")
   advanceEnforceLimit          Boolean   @default(true) @map("advance_enforce_limit")
   advanceEligibilitySource     String    @default("punch_report") @map("advance_eligibility_source")
+  /// Master switch: company manages annual leave balances (ledger / year close).
+  annualLeaveBalanceEnabled    Boolean   @default(false) @map("annual_leave_balance_enabled")
+  /// Default opening days for annual leave when balance management is on (per employee can override).
+  annualLeaveDefaultDays       Float     @default(21) @map("annual_leave_default_days")
+  /// On year close: carry remaining annual leave into the next year.
+  annualLeaveCarryOverEnabled  Boolean   @default(false) @map("annual_leave_carry_over_enabled")
+  /// On year close (or HR action): allow paying remaining annual leave as dues on payroll.
+  annualLeavePayoutEnabled     Boolean   @default(false) @map("annual_leave_payout_enabled")
   // Late deduction ladder: up to grace = free, then quarter day, then half day, above = full day.
   lateGraceMinutes             Int       @default(20) @map("late_grace_minutes")
   lateQuarterDayMaxMinutes     Int       @default(30) @map("late_quarter_day_max_minutes")
@@ -774,6 +784,23 @@ model EmployeeMapping {
   @@index([biotimeEmpCode])
   @@index([companyId])
   @@map("employee_mappings")
+}
+
+/// After a permanent delete in Hudoori, pull-from-BioTime must not recreate the employee.
+model BioTimePullExclusion {
+  companyId         String   @map("company_id")
+  id                String   @id @default(cuid())
+  biotimeEmpId      Int?     @map("biotime_emp_id")
+  empCode           String?  @map("emp_code")
+  employeeName      String?  @map("employee_name")
+  deletedEmployeeId String?  @map("deleted_employee_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, biotimeEmpId])
+  @@index([companyId, empCode])
+  @@map("biotime_pull_exclusions")
 }
 
 model Device {

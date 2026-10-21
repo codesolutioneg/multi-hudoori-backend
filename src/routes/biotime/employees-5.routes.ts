@@ -34,12 +34,13 @@ router.post('/employees/delete', requireAuth, requireHrManager, asyncHandler(asy
       payload: {
         name: result.employeeName,
         deletedAppUser: result.deletedAppUser,
+        pullExclusion: true,
       },
       diffPreview: [{
         field: 'name',
         before: result.employeeName,
         after: null,
-        note: 'تم الحذف نهائياً',
+        note: 'تم الحذف نهائياً — لن يُعاد سحبه من BioTime',
         entityLabel: result.employeeName || id,
       }],
       route: '/employees/delete',

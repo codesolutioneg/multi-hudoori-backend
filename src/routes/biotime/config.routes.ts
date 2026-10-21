@@ -43,6 +43,9 @@ router.post('/config/update', requireAuth, requireHrManager, asyncHandler(async 
     employeeTeamShowSickLeave: 'employeeTeamShowSickLeave',
     payrollFixedMonthDaysEnabled: 'payrollFixedMonthDaysEnabled',
     loanNotificationEmailsEnabled: 'loanNotificationEmailsEnabled',
+    annualLeaveBalanceEnabled: 'annualLeaveBalanceEnabled',
+    annualLeaveCarryOverEnabled: 'annualLeaveCarryOverEnabled',
+    annualLeavePayoutEnabled: 'annualLeavePayoutEnabled',
   };
   for (const [k, field] of Object.entries(boolMap)) {
     if (k in params) data[field] = parseRpcBool(params[k]);
@@ -65,6 +68,17 @@ router.post('/config/update', requireAuth, requireHrManager, asyncHandler(async 
   if ('advanceEligibilitySource' in params) {
     const src = String(params.advanceEligibilitySource);
     data.advanceEligibilitySource = src === 'shift_grid' ? 'shift_grid' : 'punch_report';
+  }
+  if ('annualLeaveDefaultDays' in params) {
+    const days = Number(params.annualLeaveDefaultDays);
+    if (!Number.isFinite(days) || days < 0 || days > 366) {
+      throw new AppError(
+        'الرصيد الافتراضي للإجازة السنوية لازم يكون من 0 لـ 366 يوم',
+        400,
+        'ACTION_ERROR',
+      );
+    }
+    data.annualLeaveDefaultDays = days;
   }
   if ('tipJobTitleIds' in params) {
     const raw = params.tipJobTitleIds;
